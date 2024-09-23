@@ -143,6 +143,44 @@ impl DdcOutputProcessor {
 }
 
 
+/// Design raised cosine weights for a given IFFT size,
+/// passband width and transition band width (given as number of bins).
+/// Use None for default values.
+fn raised_cosine_weights(
+    ifft_size: usize,
+    passband_bins: Option<usize>,
+    transition_bins: Option<usize>,
+) -> Rc<[f32]> {
+    // I am not sure if it this would work correctly for an odd size,
+    // but an overlap factor of 1/2 requires an even IFFT size anyway,
+    // so check for that.
+    // Maybe returning an error instead of panicing with invalid values
+    // would be better though.
+    assert!(ifft_size % 2 == 0);
+
+    let default_max_transition = 31;
+    let transition_bins_ = transition_bins.unwrap_or(default_max_transition.min(ifft_size/2 - 1));
+    let passband_half = passband_bins.unwrap_or(ifft_size - 2 - 2*transition_bins_) / 2 + 1;
+
+    assert!(passband_half + transition_bins_ <= ifft_size/2);
+
+    let center = ifft_size / 2;
+
+    let mut weights = vec![0.0f32; ifft_size];
+    for i in 0 .. passband_half {
+        weights[center + i] = 1.0;
+        weights[center - i] = 1.0;
+    }
+    for i in 0 .. transition_bins_ {
+        let v = 0.5 + 0.5 * (std::f32::consts::PI * (i+1) as f32 / (transition_bins_+1) as f32).cos();
+        weights[center + (passband_half + i)] = v;
+        weights[center - (passband_half + i)] = v;
+    }
+
+    Rc::<[f32]>::from(weights)
+}
+
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -160,8 +198,7 @@ mod tests {
         };
         let output_parameters = DdcOutputParameters {
             center_bin: 300,
-            // TODO: proper weights
-            weights: Rc::<[f32]>::from([1.0f32; 64]),
+            weights: raised_cosine_weights(100, None, None),
         };
         let mut ddc = DdcInputProcessor::new(&mut fft_planner, input_parameters);
         let mut ddc_output = DdcOutputProcessor::new(&mut fft_planner, input_parameters, output_parameters);
@@ -196,5 +233,24 @@ mod tests {
                 output_file.write_all(&buf[..]).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn test_weights() {
+        fn test(
+            ifft_size: usize,
+            passband_bins: Option<usize>,
+            transition_bins: Option<usize>,
+        ) {
+            let weights = raised_cosine_weights(ifft_size, passband_bins, transition_bins);
+            println!("{:?}", weights);
+            // Check that "DC" bin is 1.0
+            assert!(weights[ifft_size/2] == 1.0);
+            // Check that it falls to zero at Nyquist frequency
+            assert!(weights[0] == 0.0);
+        }
+        test(32, Some(9), Some(4));
+        test(100, None, None);
+        test(16, None, None);
     }
 }
