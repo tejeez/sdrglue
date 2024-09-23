@@ -146,6 +146,7 @@ impl DdcOutputProcessor {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use byteorder::{self, ByteOrder};
 
     use super::*;
     use sweep;
@@ -153,7 +154,7 @@ mod tests {
     #[test]
     fn test_ddc() {
         let mut fft_planner = rustfft::FftPlanner::new();
-        let mut sweepgen = sweep::SweepGenerator::new(10000000);
+        let mut sweepgen = sweep::SweepGenerator::new(100000000);
         let input_parameters = DdcInputParameters {
             fft_size: 1000,
         };
@@ -175,7 +176,7 @@ mod tests {
         // The result is not automatically checked for anything for now.
         let mut output_file = std::fs::File::create("test_results/ddc_output.cf32").unwrap();
 
-        for _ in 0..20000 {
+        for _ in 0..200000 {
             // Move overlapping part
             input_buffer.copy_within(n_new .. n_total, 0);
             // Add new samples after the overlapping part
@@ -187,11 +188,13 @@ mod tests {
 
             let result = ddc_output.process(intermediate_result);
 
-            // Take a little shortcut to simplify it a bit
-            // and write the raw buffer directly to a file.
-            // It is unsafe because the result depends on machine endianness,
-            // but this is only for testing anyway.
-            output_file.write_all(unsafe { std::mem::transmute::<&[Complex32], &[u8]>(result) }).unwrap();
+            for sample in result {
+                // Write sample in little-endian interleaved format
+                let mut buf = [0u8; 8];
+                byteorder::LittleEndian::write_f32(&mut buf[0..4], sample.re);
+                byteorder::LittleEndian::write_f32(&mut buf[4..8], sample.im);
+                output_file.write_all(&buf[..]).unwrap();
+            }
         }
     }
 }
