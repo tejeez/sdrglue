@@ -7,6 +7,8 @@ use rustfft;
 use rustfft::num_complex::Complex32;
 use rustfft::num_traits::Zero;
 
+mod sweep;
+
 
 #[derive(Copy, Clone)]
 pub struct DdcInputParameters {
@@ -101,14 +103,15 @@ impl DdcOutputProcessor {
         &mut self,
         intermediate_result: &DdcIntermediateResult,
     ) -> &[Complex32] {
+        let fft_size = self.input_parameters.fft_size;
         let ifft_size = self.buffer.len();
         let half_size = ifft_size / 2;
 
         let param_center_bin = self.parameters.center_bin;
         // Convert bin "frequencies" to indexes to the FFT result vector.
-        let center_bin = param_center_bin.rem_euclid(ifft_size as isize) as usize;
-        let first_bin = (param_center_bin - half_size as isize).rem_euclid(ifft_size as isize) as usize;
-        let last_bin  = (param_center_bin + half_size as isize).rem_euclid(ifft_size as isize) as usize;
+        let center_bin = param_center_bin.rem_euclid(fft_size as isize) as usize;
+        let first_bin = (param_center_bin - half_size as isize).rem_euclid(fft_size as isize) as usize;
+        let last_bin  = (param_center_bin + half_size as isize).rem_euclid(fft_size as isize) as usize;
 
         fn apply_weights(
             output: &mut [Complex32],
@@ -136,5 +139,59 @@ impl DdcOutputProcessor {
 
         // Fixed overlap factor of 50% for now
         &self.buffer[ifft_size/4 .. ifft_size/4 * 3]
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+    use sweep;
+
+    #[test]
+    fn test_ddc() {
+        let mut fft_planner = rustfft::FftPlanner::new();
+        let mut sweepgen = sweep::SweepGenerator::new(10000000);
+        let input_parameters = DdcInputParameters {
+            fft_size: 1000,
+        };
+        let output_parameters = DdcOutputParameters {
+            center_bin: 300,
+            // TODO: proper weights
+            weights: Rc::<[f32]>::from([1.0f32; 64]),
+        };
+        let mut ddc = DdcInputProcessor::new(&mut fft_planner, input_parameters);
+        let mut ddc_output = DdcOutputProcessor::new(&mut fft_planner, input_parameters, output_parameters);
+
+        let n_new = ddc.new_input_samples_per_block();
+        let n_overlapping = ddc.overlapping_input_samples_per_block();
+        let n_total = n_new + n_overlapping;
+
+        let mut input_buffer = vec![Complex32::zero(); n_total];
+
+        // Write output to a file so it can be manually inspected.
+        // The result is not automatically checked for anything for now.
+        let mut output_file = std::fs::File::create("test_results/ddc_output.cf32").unwrap();
+
+        for _ in 0..20000 {
+            // Move overlapping part
+            input_buffer.copy_within(n_new .. n_total, 0);
+            // Add new samples after the overlapping part
+            for sample in input_buffer[n_overlapping .. n_total].iter_mut() {
+                *sample = sweepgen.sample();
+            }
+
+            let intermediate_result = ddc.process(&input_buffer[..]);
+
+            let result = ddc_output.process(intermediate_result);
+
+            // Take a little shortcut to simplify it a bit
+            // and write the raw buffer directly to a file.
+            // It is unsafe because the result depends on machine endianness,
+            // but this is only for testing anyway.
+            output_file.write_all(unsafe { std::mem::transmute::<&[Complex32], &[u8]>(result) }).unwrap();
+        }
     }
 }
