@@ -4,8 +4,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use rustfft;
-use rustfft::num_complex::Complex32;
-use rustfft::num_traits::Zero;
+use crate::num_complex::Complex32;
+use crate::num_traits::Zero;
 
 mod sweep;
 
@@ -13,6 +13,24 @@ mod sweep;
 #[derive(Copy, Clone)]
 pub struct DdcInputParameters {
     pub fft_size: usize,
+}
+
+/// Input samples should overlap between consequent blocks.
+/// The first "overlap" samples of a block
+/// should be the same as the last samples of the previous block.
+///
+/// Caller may implement overlap in any way it wants, for example,
+/// by giving overlapping slices from a larger buffer,
+/// or by copying the end of the previous block
+/// to the beginning of the current block.
+pub struct DdcInputBlockSize {
+    /// Number of new input samples in each input block.
+    pub new:     usize,
+    /// Number of overlapping samples between consecutive blocks.
+    pub overlap: usize,
+    /// Total number of samples in each input block.
+    /// This is equal to the sum of "new" and "overlap".
+    pub total:   usize,
 }
 
 pub struct DdcIntermediateResult {
@@ -40,27 +58,17 @@ impl DdcInputProcessor {
         }
     }
 
-    pub fn new_input_samples_per_block(&self) -> usize {
+    pub fn input_block_size(&self) -> DdcInputBlockSize {
         // Fixed overlap factor of 50% for now
-        self.parameters.fft_size / 2
+        let new = self.parameters.fft_size / 2;
+        let overlap = self.parameters.fft_size / 2;
+        DdcInputBlockSize {
+            new,
+            overlap,
+            total: new + overlap,
+        }
     }
 
-    pub fn overlapping_input_samples_per_block(&self) -> usize {
-        // Fixed overlap factor of 50% for now
-        self.parameters.fft_size / 2
-    }
-
-    /// Input samples should overlap between consequent blocks.
-    ///
-    /// The total length of an input block is given by
-    /// new_input_samples_per_block() + overlapping_input_samples_per_block().
-    /// The first overlapping_input_samples_per_block() samples of a block
-    /// should be the same as the last samples of the previous block.
-    ///
-    /// Caller may implement overlap in any way it wants, for example,
-    /// by giving overlapping slices from a larger buffer,
-    /// or by copying the end of the previous block
-    /// to the beginning of the current block.
     pub fn process(
         &mut self,
         input: &[Complex32],
@@ -158,7 +166,7 @@ fn raised_cosine_weights(
     // would be better though.
     assert!(ifft_size % 2 == 0);
 
-    let default_max_transition = 31;
+    let default_max_transition = 15;
     let transition_bins_ = transition_bins.unwrap_or(default_max_transition.min(ifft_size/2 - 1));
     let passband_half = passband_bins.unwrap_or(ifft_size - 2 - 2*transition_bins_) / 2 + 1;
 
@@ -203,9 +211,7 @@ mod tests {
         let mut ddc = DdcInputProcessor::new(&mut fft_planner, input_parameters);
         let mut ddc_output = DdcOutputProcessor::new(&mut fft_planner, input_parameters, output_parameters);
 
-        let n_new = ddc.new_input_samples_per_block();
-        let n_overlapping = ddc.overlapping_input_samples_per_block();
-        let n_total = n_new + n_overlapping;
+        let blocksize = ddc.input_block_size();
 
         let mut input_buffer = vec![Complex32::zero(); n_total];
 
@@ -215,9 +221,9 @@ mod tests {
 
         for _ in 0..200000 {
             // Move overlapping part
-            input_buffer.copy_within(n_new .. n_total, 0);
+            input_buffer.copy_within(blocksize.new-blocksize.overlap .. blocksize.total, 0);
             // Add new samples after the overlapping part
-            for sample in input_buffer[n_overlapping .. n_total].iter_mut() {
+            for sample in input_buffer[blocksize.overlap .. blocksize.total].iter_mut() {
                 *sample = sweepgen.sample();
             }
 
