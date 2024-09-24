@@ -54,6 +54,27 @@ pub const LIMESDR_DEFAULT: SoapyIoConfig = SoapyIoConfig {
     tx_args: &[],
 };
 
+pub const SXCEIVER_DEFAULT: SoapyIoConfig = SoapyIoConfig {
+    fs: 600e3,
+    rx_freq: 432.4e6,
+    tx_freq: 432.4e6,
+    rx_chan: 0,
+    tx_chan: 0,
+    rx_ant:  "RX",
+    tx_ant:  "TX",
+    rx_gain: &[
+        (Some("LNA"), 42.0),
+        (Some("PGA"), 16.0),
+    ],
+    tx_gain: &[
+        (Some("DAC"  ), 9.0),
+        (Some("MIXER"), 30.0),
+    ],
+    dev_args: &[("driver", "sx")],
+    rx_args: &[],
+    tx_args: &[],
+};
+
 pub struct SoapyIo {
     rx_chan:  usize,
     tx_chan:  usize,

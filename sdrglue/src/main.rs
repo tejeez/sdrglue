@@ -2,7 +2,6 @@ use rustfft::num_complex as num_complex;
 use rustfft::num_traits as num_traits;
 use num_complex::Complex32;
 use num_traits::Zero;
-use soapysdr::StreamResult;
 
 mod fcfb;
 mod soapyconfig;
@@ -11,7 +10,7 @@ fn main() {
     // Spacing of FCFB FFT bins in Hz
     let bin_spacing = 500.0;
 
-    let mut sdr = soapyconfig::SoapyIo::init(&soapyconfig::LIMESDR_DEFAULT).unwrap();
+    let mut sdr = soapyconfig::SoapyIo::init(&soapyconfig::SXCEIVER_DEFAULT).unwrap();
 
     let ddc_in_params = fcfb::DdcInputParameters {
         fft_size: (sdr.rx_sample_rate().unwrap() / bin_spacing).round() as usize,
