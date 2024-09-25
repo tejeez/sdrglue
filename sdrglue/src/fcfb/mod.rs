@@ -11,12 +11,12 @@ mod sweep;
 
 
 #[derive(Copy, Clone)]
-pub struct DdcInputParameters {
+pub struct AnalysisInputParameters {
     pub fft_size: usize,
 }
 
 #[derive(Copy, Clone)]
-pub struct DdcInputBlockSize {
+pub struct AnalysisInputBlockSize {
     /// Number of new input samples in each input block.
     pub new:     usize,
     /// Number of overlapping samples between consecutive blocks.
@@ -27,13 +27,13 @@ pub struct DdcInputBlockSize {
     pub overlap: usize,
 }
 
-pub struct DdcInputBuffer {
-    size: DdcInputBlockSize,
+pub struct AnalysisInputBuffer {
+    size: AnalysisInputBlockSize,
     buffer: Vec<Complex32>,
 }
 
-impl DdcInputBuffer {
-    pub fn new(size: DdcInputBlockSize) -> Self {
+impl AnalysisInputBuffer {
+    pub fn new(size: AnalysisInputBlockSize) -> Self {
         Self {
             size,
             buffer: vec![Complex32::zero(); size.new + size.overlap],
@@ -56,59 +56,59 @@ impl DdcInputBuffer {
 }
 
 
-pub struct DdcIntermediateResult {
+pub struct AnalysisIntermediateResult {
     fft_result: Vec<Complex32>,
 }
 
-/// Fast-convolution filter bank for digital down-conversion.
-pub struct DdcInputProcessor {
-    parameters: DdcInputParameters,
+/// Fast-convolution analysis filter bank.
+pub struct AnalysisInputProcessor {
+    parameters: AnalysisInputParameters,
     fft_plan: Arc<dyn rustfft::Fft<f32>>,
-    result: DdcIntermediateResult,
+    result: AnalysisIntermediateResult,
 }
 
-impl DdcInputProcessor {
+impl AnalysisInputProcessor {
     pub fn new(
         fft_planner: &mut rustfft::FftPlanner<f32>,
-        parameters: DdcInputParameters,
+        parameters: AnalysisInputParameters,
     ) -> Self {
         Self {
             parameters,
             fft_plan: fft_planner.plan_fft_forward(parameters.fft_size),
-            result: DdcIntermediateResult {
+            result: AnalysisIntermediateResult {
                 fft_result: vec![Complex32::zero(); parameters.fft_size],
             }
         }
     }
 
-    pub fn input_block_size(&self) -> DdcInputBlockSize {
+    pub fn input_block_size(&self) -> AnalysisInputBlockSize {
         // Fixed overlap factor of 50% for now
-        DdcInputBlockSize {
+        AnalysisInputBlockSize {
             new: self.parameters.fft_size / 2,
             overlap: self.parameters.fft_size / 2,
         }
     }
 
-    pub fn make_input_buffer(&self) -> DdcInputBuffer {
-        DdcInputBuffer::new(self.input_block_size())
+    pub fn make_input_buffer(&self) -> AnalysisInputBuffer {
+        AnalysisInputBuffer::new(self.input_block_size())
     }
 
     /// Input samples should overlap between consequent blocks.
     /// The first "overlap" samples of a block
     /// should be the same as the last samples of the previous block.
     /// The numbers of samples are returned by the input_block_size()
-    /// method, returning an DdcInputBlockSize struct.
+    /// method, returning an AnalysisInputBlockSize struct.
     ///
     /// Caller may implement overlap in any way it wants, for example,
     /// by giving overlapping slices from a larger buffer,
     /// or by copying the end of the previous block
     /// to the beginning of the current block.
-    /// The latter can be done using the DdcInputBuffer struct
+    /// The latter can be done using the AnalysisInputBuffer struct
     /// which can be constructed using the make_input_buffer() method.
     pub fn process(
         &mut self,
         input: &[Complex32],
-    ) -> &DdcIntermediateResult {
+    ) -> &AnalysisIntermediateResult {
         self.result.fft_result.copy_from_slice(input);
         self.fft_plan.process(&mut self.result.fft_result[..]);
         &self.result
@@ -116,23 +116,23 @@ impl DdcInputProcessor {
 }
 
 #[derive(Clone)]
-pub struct DdcOutputParameters {
+pub struct AnalysisOutputParameters {
     pub center_bin: isize,
     pub weights: Rc<[f32]>,
 }
 
-pub struct DdcOutputProcessor {
-    input_parameters: DdcInputParameters,
-    parameters: DdcOutputParameters,
+pub struct AnalysisOutputProcessor {
+    input_parameters: AnalysisInputParameters,
+    parameters: AnalysisOutputParameters,
     ifft_plan: Arc<dyn rustfft::Fft<f32>>,
     buffer: Vec<Complex32>,
 }
 
-impl DdcOutputProcessor {
+impl AnalysisOutputProcessor {
     pub fn new(
         fft_planner: &mut rustfft::FftPlanner<f32>,
-        input_parameters: DdcInputParameters,
-        parameters: DdcOutputParameters,
+        input_parameters: AnalysisInputParameters,
+        parameters: AnalysisOutputParameters,
     ) -> Self {
         let ifft_size = parameters.weights.len();
         Self {
@@ -145,7 +145,7 @@ impl DdcOutputProcessor {
 
     pub fn process(
         &mut self,
-        intermediate_result: &DdcIntermediateResult,
+        intermediate_result: &AnalysisIntermediateResult,
     ) -> &[Complex32] {
         let fft_size = self.input_parameters.fft_size;
         let ifft_size = self.buffer.len();
@@ -234,34 +234,34 @@ mod tests {
     use sweep;
 
     #[test]
-    fn test_ddc() {
+    fn test_analysis() {
         let mut fft_planner = rustfft::FftPlanner::new();
         let sweep_length = 1000000;
         let mut sweepgen = sweep::SweepGenerator::new(sweep_length);
-        let input_parameters = DdcInputParameters {
+        let input_parameters = AnalysisInputParameters {
             fft_size: 1000,
         };
-        let output_parameters = DdcOutputParameters {
+        let output_parameters = AnalysisOutputParameters {
             center_bin: 300,
             weights: raised_cosine_weights(100, None, None),
         };
-        let mut ddc = DdcInputProcessor::new(&mut fft_planner, input_parameters);
-        let mut ddc_output = DdcOutputProcessor::new(&mut fft_planner, input_parameters, output_parameters);
+        let mut an = AnalysisInputProcessor::new(&mut fft_planner, input_parameters);
+        let mut an_output = AnalysisOutputProcessor::new(&mut fft_planner, input_parameters, output_parameters);
 
-        let mut input_buffer = ddc.make_input_buffer();
+        let mut input_buffer = an.make_input_buffer();
 
         // Write output to a file so it can be manually inspected.
         // The result is not automatically checked for anything for now.
-        let mut output_file = std::fs::File::create("test_results/ddc_output.cf32").unwrap();
+        let mut output_file = std::fs::File::create("test_results/analysis_output.cf32").unwrap();
 
         for _ in 0..(sweep_length / (input_parameters.fft_size/2) as u64) {
             for sample in input_buffer.prepare_for_new_samples() {
                 *sample = sweepgen.sample();
             }
 
-            let intermediate_result = ddc.process(input_buffer.buffer());
+            let intermediate_result = an.process(input_buffer.buffer());
 
-            let result = ddc_output.process(intermediate_result);
+            let result = an_output.process(intermediate_result);
 
             for sample in result {
                 // Write sample in little-endian interleaved format
