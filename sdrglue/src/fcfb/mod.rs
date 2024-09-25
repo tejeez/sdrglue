@@ -147,37 +147,20 @@ impl AnalysisOutputProcessor {
         &mut self,
         intermediate_result: &AnalysisIntermediateResult,
     ) -> &[Complex32] {
+        assert!(intermediate_result.fft_result.len() == self.input_parameters.fft_size);
+
         let fft_size = self.input_parameters.fft_size;
         let ifft_size = self.buffer.len();
-        let half_size = ifft_size / 2;
+        let half_size = (ifft_size / 2) as isize;
 
-        let param_center_bin = self.parameters.center_bin;
-        // Convert bin "frequencies" to indexes to the FFT result vector.
-        let center_bin = param_center_bin.rem_euclid(fft_size as isize) as usize;
-        let first_bin = (param_center_bin - half_size as isize).rem_euclid(fft_size as isize) as usize;
-        let last_bin  = (param_center_bin + half_size as isize).rem_euclid(fft_size as isize) as usize;
-
-        fn apply_weights(
-            output: &mut [Complex32],
-            weights: &[f32],
-            input: &[Complex32],
-        ) {
-            for (out, (weight, in_)) in output.iter_mut().zip(weights.iter().zip(input.iter())) {
-                *out = in_ * weight;
-            }
+        // This could probably be optimized a lot.
+        // Now it computes each index using modulos which might be slow.
+        for bin_number in -half_size .. half_size {
+            let bin_index_in = (self.parameters.center_bin + bin_number).rem_euclid(fft_size as isize) as usize;
+            let bin_index_out = bin_number.rem_euclid(ifft_size as isize) as usize;
+            // Apply weight
+            self.buffer[bin_index_out] = self.parameters.weights[bin_index_out] * intermediate_result.fft_result[bin_index_in];
         }
-        // Negative output frequencies
-        apply_weights(
-            &mut self.buffer[half_size .. ifft_size],
-            &self.parameters.weights[0 .. half_size],
-            &intermediate_result.fft_result[first_bin .. center_bin]
-        );
-        // Positive output frequencies
-        apply_weights(
-            &mut self.buffer[0 .. half_size],
-            &self.parameters.weights[half_size .. ifft_size],
-            &intermediate_result.fft_result[center_bin .. last_bin]
-        );
 
         self.ifft_plan.process(&mut self.buffer);
 
@@ -208,17 +191,20 @@ fn raised_cosine_weights(
 
     assert!(passband_half + transition_bins_ <= ifft_size/2);
 
-    let center = ifft_size / 2;
-
     let mut weights = vec![0.0f32; ifft_size];
     for i in 0 .. passband_half {
-        weights[center + i] = 1.0;
-        weights[center - i] = 1.0;
+        weights[i] = 1.0;
+        if i != 0 {
+            weights[ifft_size - i] = 1.0;
+        }
     }
     for i in 0 .. transition_bins_ {
         let v = 0.5 + 0.5 * (std::f32::consts::PI * (i+1) as f32 / (transition_bins_+1) as f32).cos();
-        weights[center + (passband_half + i)] = v;
-        weights[center - (passband_half + i)] = v;
+        let j = passband_half + i;
+        weights[j] = v;
+        if j != 0 {
+            weights[ifft_size - j] = v;
+        }
     }
 
     Rc::<[f32]>::from(weights)
@@ -242,7 +228,7 @@ mod tests {
             fft_size: 1000,
         };
         let output_parameters = AnalysisOutputParameters {
-            center_bin: 300,
+            center_bin: 10,
             weights: raised_cosine_weights(100, None, None),
         };
         let mut an = AnalysisInputProcessor::new(&mut fft_planner, input_parameters);
@@ -283,9 +269,9 @@ mod tests {
             let weights = raised_cosine_weights(ifft_size, passband_bins, transition_bins);
             println!("{:?}", weights);
             // Check that "DC" bin is 1.0
-            assert!(weights[ifft_size/2] == 1.0);
+            assert!(weights[0] == 1.0);
             // Check that it falls to zero at Nyquist frequency
-            assert!(weights[0] == 0.0);
+            assert!(weights[ifft_size/2] == 0.0);
         }
         test(32, Some(9), Some(4));
         test(100, None, None);
