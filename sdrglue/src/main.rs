@@ -17,17 +17,11 @@ fn main() {
     };
     let mut fft_planner = rustfft::FftPlanner::new();
     let mut ddc = fcfb::DdcInputProcessor::new(&mut fft_planner, ddc_in_params);
-    let rx_block_size = ddc.input_block_size();
-
-    let mut rx_buffer = vec![Complex32::zero(); rx_block_size.total];
-
+    let mut rx_buffer = ddc.make_input_buffer();
     loop {
-        // Move overlapping part from the end of the previous block to the beginning
-        rx_buffer.copy_within(rx_block_size.new - rx_block_size.overlap .. rx_block_size.total, 0);
-        // Add new samples after the overlapping part
-        match sdr.receive(&mut rx_buffer[rx_block_size.overlap .. rx_block_size.total]) {
+        match sdr.receive(rx_buffer.prepare_for_new_samples()) {
             Ok(_rx_result) => {
-                ddc.process(&rx_buffer);
+                ddc.process(rx_buffer.buffer());
             },
             Err(_) => { break },
         }
