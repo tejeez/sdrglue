@@ -175,4 +175,12 @@ impl SoapyIo {
     pub fn tx_sample_rate(&self) -> Result<f64, soapysdr::Error> {
         self.dev.sample_rate(soapysdr::Direction::Tx, self.tx_chan)
     }
+
+    pub fn rx_center_frequency(&self) -> Result<f64, soapysdr::Error> {
+        self.dev.frequency(soapysdr::Direction::Rx, self.rx_chan)
+    }
+
+    pub fn tx_center_frequency(&self) -> Result<f64, soapysdr::Error> {
+        self.dev.frequency(soapysdr::Direction::Tx, self.tx_chan)
+    }
 }

@@ -173,7 +173,7 @@ impl AnalysisOutputProcessor {
 /// Design raised cosine weights for a given IFFT size,
 /// passband width and transition band width (given as number of bins).
 /// Use None for default values.
-fn raised_cosine_weights(
+pub fn raised_cosine_weights(
     ifft_size: usize,
     passband_bins: Option<usize>,
     transition_bins: Option<usize>,
