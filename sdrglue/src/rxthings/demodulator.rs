@@ -1,5 +1,6 @@
 
-use super::{RxChannelProcessor, ComplexSample};
+use super::RxChannelProcessor;
+use crate::{ComplexSample, sample_consts};
 
 pub struct DemodulateToUdp {
     /// Center frequency to demodulate
@@ -48,7 +49,7 @@ impl RxChannelProcessor for DemodulateToUdp {
         self.output_buffer.clear();
         for &sample in samples {
             let full_scale = 32767.0;
-            let demodulated_fm = ((sample * self.previous_sample.conj()).arg() * (full_scale * std::f32::consts::FRAC_1_PI)) as i16;
+            let demodulated_fm = ((sample * self.previous_sample.conj()).arg() * (full_scale * sample_consts::FRAC_1_PI)) as i16;
             self.output_buffer.push((demodulated_fm & 0xFF) as u8);
             self.output_buffer.push((demodulated_fm >> 8)   as u8);
             self.previous_sample = sample;

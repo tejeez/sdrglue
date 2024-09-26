@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use rustfft;
-use crate::num_complex::Complex32;
+use crate::{Sample, ComplexSample, sample_consts};
 use crate::num_traits::Zero;
 
 mod sweep;
@@ -29,20 +29,20 @@ pub struct AnalysisInputBlockSize {
 
 pub struct AnalysisInputBuffer {
     size: AnalysisInputBlockSize,
-    buffer: Vec<Complex32>,
+    buffer: Vec<ComplexSample>,
 }
 
 impl AnalysisInputBuffer {
     pub fn new(size: AnalysisInputBlockSize) -> Self {
         Self {
             size,
-            buffer: vec![Complex32::zero(); size.new + size.overlap],
+            buffer: vec![ComplexSample::ZERO; size.new + size.overlap],
         }
     }
 
     /// Prepare buffer for a new input block.
     /// Return a slice for writing new input samples.
-    pub fn prepare_for_new_samples(&mut self) -> &mut [Complex32] {
+    pub fn prepare_for_new_samples(&mut self) -> &mut [ComplexSample] {
         // Move overlapping part from the end of the previous block to the beginning
         self.buffer.copy_within(self.size.new .. self.size.new + self.size.overlap, 0);
         // Return slice for writing new samples
@@ -50,33 +50,33 @@ impl AnalysisInputBuffer {
     }
 
     /// Return a slice which can be passed to the process() method of a filter bank.
-    pub fn buffer(&self) -> &[Complex32] {
+    pub fn buffer(&self) -> &[ComplexSample] {
         &self.buffer[..]
     }
 }
 
 
 pub struct AnalysisIntermediateResult {
-    fft_result: Vec<Complex32>,
+    fft_result: Vec<ComplexSample>,
 }
 
 /// Fast-convolution analysis filter bank.
 pub struct AnalysisInputProcessor {
     parameters: AnalysisInputParameters,
-    fft_plan: Arc<dyn rustfft::Fft<f32>>,
+    fft_plan: Arc<dyn rustfft::Fft<Sample>>,
     result: AnalysisIntermediateResult,
 }
 
 impl AnalysisInputProcessor {
     pub fn new(
-        fft_planner: &mut rustfft::FftPlanner<f32>,
+        fft_planner: &mut rustfft::FftPlanner<Sample>,
         parameters: AnalysisInputParameters,
     ) -> Self {
         Self {
             parameters,
             fft_plan: fft_planner.plan_fft_forward(parameters.fft_size),
             result: AnalysisIntermediateResult {
-                fft_result: vec![Complex32::zero(); parameters.fft_size],
+                fft_result: vec![ComplexSample::ZERO; parameters.fft_size],
             }
         }
     }
@@ -107,7 +107,7 @@ impl AnalysisInputProcessor {
     /// which can be constructed using the make_input_buffer() method.
     pub fn process(
         &mut self,
-        input: &[Complex32],
+        input: &[ComplexSample],
     ) -> &AnalysisIntermediateResult {
         self.result.fft_result.copy_from_slice(input);
         self.fft_plan.process(&mut self.result.fft_result[..]);
@@ -118,19 +118,19 @@ impl AnalysisInputProcessor {
 #[derive(Clone)]
 pub struct AnalysisOutputParameters {
     pub center_bin: isize,
-    pub weights: Rc<[f32]>,
+    pub weights: Rc<[Sample]>,
 }
 
 pub struct AnalysisOutputProcessor {
     input_parameters: AnalysisInputParameters,
     parameters: AnalysisOutputParameters,
-    ifft_plan: Arc<dyn rustfft::Fft<f32>>,
-    buffer: Vec<Complex32>,
+    ifft_plan: Arc<dyn rustfft::Fft<Sample>>,
+    buffer: Vec<ComplexSample>,
 }
 
 impl AnalysisOutputProcessor {
     pub fn new(
-        fft_planner: &mut rustfft::FftPlanner<f32>,
+        fft_planner: &mut rustfft::FftPlanner<Sample>,
         input_parameters: AnalysisInputParameters,
         parameters: AnalysisOutputParameters,
     ) -> Self {
@@ -139,14 +139,14 @@ impl AnalysisOutputProcessor {
             input_parameters,
             parameters: parameters.clone(),
             ifft_plan: fft_planner.plan_fft_inverse(ifft_size),
-            buffer: vec![Complex32::zero(); ifft_size],
+            buffer: vec![ComplexSample::ZERO; ifft_size],
         }
     }
 
     pub fn process(
         &mut self,
         intermediate_result: &AnalysisIntermediateResult,
-    ) -> &[Complex32] {
+    ) -> &[ComplexSample] {
         assert!(intermediate_result.fft_result.len() == self.input_parameters.fft_size);
 
         let fft_size = self.input_parameters.fft_size;
@@ -177,7 +177,7 @@ pub fn raised_cosine_weights(
     ifft_size: usize,
     passband_bins: Option<usize>,
     transition_bins: Option<usize>,
-) -> Rc<[f32]> {
+) -> Rc<[Sample]> {
     // I am not sure if it this would work correctly for an odd size,
     // but an overlap factor of 1/2 requires an even IFFT size anyway,
     // so check for that.
@@ -191,7 +191,7 @@ pub fn raised_cosine_weights(
 
     assert!(passband_half + transition_bins_ <= ifft_size/2);
 
-    let mut weights = vec![0.0f32; ifft_size];
+    let mut weights = vec![Sample::zero(); ifft_size];
     for i in 0 .. passband_half {
         weights[i] = 1.0;
         if i != 0 {
@@ -199,7 +199,7 @@ pub fn raised_cosine_weights(
         }
     }
     for i in 0 .. transition_bins_ {
-        let v = 0.5 + 0.5 * (std::f32::consts::PI * (i+1) as f32 / (transition_bins_+1) as f32).cos();
+        let v = 0.5 + 0.5 * (sample_consts::PI * (i+1) as Sample / (transition_bins_+1) as Sample).cos();
         let j = passband_half + i;
         weights[j] = v;
         if j != 0 {
@@ -207,7 +207,7 @@ pub fn raised_cosine_weights(
         }
     }
 
-    Rc::<[f32]>::from(weights)
+    Rc::<[Sample]>::from(weights)
 }
 
 

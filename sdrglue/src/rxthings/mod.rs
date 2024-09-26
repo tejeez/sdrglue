@@ -1,9 +1,6 @@
 //! Receive channel processors.
 
-use super::num_complex;
-
-pub type Sample = f32;
-pub type ComplexSample = num_complex::Complex<Sample>;
+use crate::ComplexSample;
 
 pub mod demodulator;
 pub use demodulator::*;

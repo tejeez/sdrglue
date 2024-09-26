@@ -1,5 +1,12 @@
-use rustfft::num_complex as num_complex;
-use rustfft::num_traits as num_traits;
+
+pub use rustfft::num_complex as num_complex;
+pub use rustfft::num_traits as num_traits;
+/// Floating point type used for signal processing.
+pub type Sample = f32;
+/// Complex floating point type used for signal processing.
+pub type ComplexSample = num_complex::Complex<Sample>;
+/// Mathematical consts for the Sample type.
+pub use std::f32::consts as sample_consts;
 
 mod fcfb;
 mod rxthings;
@@ -12,7 +19,7 @@ struct RxChannel {
 
 impl RxChannel {
     fn new(
-        fft_planner: &mut rustfft::FftPlanner<rxthings::Sample>,
+        fft_planner: &mut rustfft::FftPlanner<Sample>,
         analysis_in_params: fcfb::AnalysisInputParameters,
         sdr_rx_sample_rate: f64,
         sdr_rx_center_frequency: f64,

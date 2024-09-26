@@ -1,7 +1,6 @@
-use crate::num_complex::Complex32;
 use soapysdr;
 
-type StreamType = Complex32;
+type StreamType = crate::ComplexSample;
 
 pub struct SoapyIoConfig<'a> {
     /// Sample rate
