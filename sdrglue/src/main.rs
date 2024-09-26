@@ -8,6 +8,8 @@ pub type ComplexSample = num_complex::Complex<Sample>;
 /// Mathematical consts for the Sample type.
 pub use std::f32::consts as sample_consts;
 
+mod configuration;
+use configuration::Parser;
 mod fcfb;
 mod rxthings;
 mod soapyconfig;
@@ -49,10 +51,12 @@ impl RxChannel {
 }
 
 fn main() {
+    let cli = configuration::Cli::parse();
+
     // Spacing of FCFB FFT bins in Hz
     let bin_spacing = 500.0;
 
-    let mut sdr = soapyconfig::SoapyIo::init(&soapyconfig::LIMESDR_DEFAULT).unwrap();
+    let mut sdr = soapyconfig::SoapyIo::init(&cli).unwrap();
 
     let sdr_rx_sample_rate = sdr.rx_sample_rate().unwrap();
     let sdr_rx_center_frequency = sdr.rx_center_frequency().unwrap();
@@ -66,16 +70,19 @@ fn main() {
 
     let mut rx_processors = Vec::<RxChannel>::new();
 
-    rx_processors.push(RxChannel::new(
-        &mut fft_planner,
-        analysis_in_params,
-        sdr_rx_sample_rate,
-        sdr_rx_center_frequency,
-        Box::new(rxthings::DemodulateToUdp::new(&rxthings::DemodulateToUdpParameters {
-            center_frequency: 432.5e6,
-            address: "127.0.0.1:7355",
-        })),
-    ));
+    for args in cli.demodulate_to_udp.chunks_exact(3) {
+        rx_processors.push(RxChannel::new(
+            &mut fft_planner,
+            analysis_in_params,
+            sdr_rx_sample_rate,
+            sdr_rx_center_frequency,
+            Box::new(rxthings::DemodulateToUdp::new(&rxthings::DemodulateToUdpParameters {
+                center_frequency: args[1].parse().unwrap(),
+                address: args[0].as_str(),
+                // TODO: different modulations
+            })),
+        ));
+    }
 
     loop {
         match sdr.receive(rx_buffer.prepare_for_new_samples()) {

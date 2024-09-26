@@ -1,44 +1,30 @@
 use soapysdr;
+use crate::configuration;
 
 type StreamType = crate::ComplexSample;
 
-pub struct SoapyIoConfig<'a> {
-    /// Sample rate
-    pub fs:       f64,
-    /// Receive center frequency
-    pub rx_freq:  f64,
-    /// Transmit center frequency
-    pub tx_freq:  f64,
-    /// Receive channel number
-    pub rx_chan:  usize,
-    /// Transmit channel number
-    pub tx_chan:  usize,
+struct SdrDefaults<'a> {
+    /// Receive sample rate
+    pub rx_fs: f64,
+    /// Transmit sample rate
+    pub tx_fs: f64,
     /// Receive antenna
-    pub rx_ant:   &'a str,
+    pub rx_ant:   Option<&'a str>,
     /// Transmit antenna
-    pub tx_ant:   &'a str,
+    pub tx_ant:   Option<&'a str>,
     /// Receive gain(s).
     /// Use (None, gain_value) to set the overall gain.
     /// Use ("name", gain_value) to set a specific gain element.
     pub rx_gain:  &'a[(Option<&'a str>, f64)],
     /// Transmit gain(s).
     pub tx_gain:  &'a[(Option<&'a str>, f64)],
-    /// Device arguments
-    pub dev_args: &'a [(&'a str, &'a str)],
-    /// Receive stream arguments
-    pub rx_args:  &'a [(&'a str, &'a str)],
-    /// Transmit stream arguments
-    pub tx_args:  &'a [(&'a str, &'a str)],
 }
 
-pub const LIMESDR_DEFAULT: SoapyIoConfig = SoapyIoConfig {
-    fs: 8192e3,
-    rx_freq: 435e6,
-    tx_freq: 435e6,
-    rx_chan: 0,
-    tx_chan: 0,
-    rx_ant:  "LNAL",
-    tx_ant:  "BAND1",
+pub const LIMESDR_DEFAULT: SdrDefaults = SdrDefaults {
+    rx_fs: 8192e3,
+    tx_fs: 8192e3,
+    rx_ant: Some("LNAL"),
+    tx_ant: Some("BAND1"),
     rx_gain: &[
         (Some("LNA"), 20.0),
         (Some("TIA"), 10.0),
@@ -48,19 +34,13 @@ pub const LIMESDR_DEFAULT: SoapyIoConfig = SoapyIoConfig {
         (Some("PAD" ), 52.0),
         (Some("IAMP"), 3.0),
     ],
-    dev_args: &[("driver", "lime")],
-    rx_args: &[],
-    tx_args: &[],
 };
 
-pub const SXCEIVER_DEFAULT: SoapyIoConfig = SoapyIoConfig {
-    fs: 600e3,
-    rx_freq: 432.4e6,
-    tx_freq: 432.4e6,
-    rx_chan: 0,
-    tx_chan: 0,
-    rx_ant:  "RX",
-    tx_ant:  "TX",
+pub const SXCEIVER_DEFAULT: SdrDefaults = SdrDefaults {
+    rx_fs: 600e3,
+    tx_fs: 600e3,
+    rx_ant: Some("RX"),
+    tx_ant: Some("TX"),
     rx_gain: &[
         (Some("LNA"), 42.0),
         (Some("PGA"), 16.0),
@@ -69,26 +49,23 @@ pub const SXCEIVER_DEFAULT: SoapyIoConfig = SoapyIoConfig {
         (Some("DAC"  ), 9.0),
         (Some("MIXER"), 30.0),
     ],
-    dev_args: &[("driver", "sx")],
-    rx_args: &[],
-    tx_args: &[],
 };
 
 pub struct SoapyIo {
-    rx_chan:  usize,
-    tx_chan:  usize,
+    rx_ch:  usize,
+    tx_ch:  usize,
     dev: soapysdr::Device,
-    rx:  soapysdr::RxStream<StreamType>,
-    tx:  soapysdr::TxStream<StreamType>,
+    /// Receive stream. None if receiving is disabled.
+    rx:  Option<soapysdr::RxStream<StreamType>>,
+    /// Transmit stream. None if transmitting is disabled.
+    tx:  Option<soapysdr::TxStream<StreamType>>,
 }
 
-/// Convert a slice of ("key", "value") pairs to soapysdr::Args.
-/// This might not be really needed, but it makes configuration struct
-/// contents easier to write.
-fn convert_args(key_value_pairs: &[(&str, &str)]) -> soapysdr::Args {
+/// Convert command line device arguments to soapysdr::Args.
+fn convert_args(cli_args: &[String]) -> soapysdr::Args {
     let mut args = soapysdr::Args::new();
-    for (key, value) in key_value_pairs {
-        args.set(*key, *value);
+    for arg in cli_args.chunks_exact(2) {
+        args.set(arg[0].as_str(), arg[1].as_str());
     }
     args
 }
@@ -108,13 +85,28 @@ macro_rules! soapycheck {
 }
 
 impl SoapyIo {
-    pub fn init(conf: &SoapyIoConfig) -> Result<Self, soapysdr::Error> {
+    pub fn init(cli: &configuration::Cli) -> Result<Self, soapysdr::Error> {
+        let rx_ch = cli.sdr_rx_ch;
+        let tx_ch = cli.sdr_tx_ch;
+
         let dev = soapycheck!("open SoapySDR device",
-            soapysdr::Device::new(convert_args(conf.dev_args)));
-        soapycheck!("set RX sample rate",
-            dev.set_sample_rate(soapysdr::Direction::Rx, conf.rx_chan, conf.fs));
-        soapycheck!("set TX sample rate",
-            dev.set_sample_rate(soapysdr::Direction::Tx, conf.tx_chan, conf.fs));
+            soapysdr::Device::new(convert_args(&cli.sdr_device)));
+
+        let rx_enabled = cli.sdr_rx_freq.is_some();
+        let tx_enabled = cli.sdr_rx_freq.is_some();
+
+        let sdr_defaults = LIMESDR_DEFAULT; // TODO: choose correct defaults
+
+        if rx_enabled {
+            soapycheck!("set RX sample rate",
+                dev.set_sample_rate(soapysdr::Direction::Rx, rx_ch, cli.sdr_rx_fs.unwrap_or(sdr_defaults.rx_fs)));
+        }
+        if tx_enabled {
+            soapycheck!("set TX sample rate",
+                dev.set_sample_rate(soapysdr::Direction::Tx, tx_ch, cli.sdr_tx_fs.unwrap_or(sdr_defaults.tx_fs)));
+        }
+        //TODO
+        /*
         soapycheck!("set RX center frequency",
             dev.set_frequency(soapysdr::Direction::Rx, conf.rx_chan, conf.rx_freq, soapysdr::Args::new()));
         soapycheck!("set TX center frequency",
@@ -141,45 +133,72 @@ impl SoapyIo {
                     dev.set_gain(soapysdr::Direction::Tx, conf.tx_chan, *value));
             }
         }
-        let mut rx = soapycheck!("setup RX stream",
-            dev.rx_stream_args(&[conf.rx_chan], convert_args(conf.rx_args)));
-        let mut tx = soapycheck!("setup TX stream",
-            dev.tx_stream_args(&[conf.tx_chan], convert_args(conf.tx_args)));
-        soapycheck!("activate RX stream",
-            rx.activate(None));
-        soapycheck!("activate TX stream",
-            tx.activate(None));
+        */
+        let mut rx = if rx_enabled {
+            Some(soapycheck!("setup RX stream",
+                dev.rx_stream_args(&[rx_ch], convert_args(&cli.rx_args))))
+        } else {
+            None
+        };
+        let mut tx = if tx_enabled {
+            Some(soapycheck!("setup TX stream",
+                dev.tx_stream_args(&[tx_ch], convert_args(&cli.tx_args))))
+        } else {
+            None
+        };
+        if let Some(rx) = &mut rx {
+            soapycheck!("activate RX stream",
+                rx.activate(None));
+        }
+        if let Some(tx) = &mut tx {
+            soapycheck!("activate TX stream",
+                tx.activate(None));
+        }
         Ok(Self {
-            rx_chan: conf.rx_chan,
-            tx_chan: conf.tx_chan,
-            dev: dev,
-            rx:  rx,
-            tx:  tx,
+            rx_ch,
+            tx_ch,
+            dev,
+            rx,
+            tx,
         })
     }
 
     pub fn receive(&mut self, buffer: &mut [StreamType]) -> Result<soapysdr::StreamResult, soapysdr::Error> {
-        // TODO: implement read_exact and use that
-        self.rx.read_ext(&mut [buffer], soapysdr::StreamFlags::default(), None, 100000)
+        if let Some(rx) = &mut self.rx {
+            // TODO: implement read_exact and use that
+            rx.read_ext(&mut [buffer], soapysdr::StreamFlags::default(), None, 100000)
+        } else {
+            Err(soapysdr::Error {
+                code: soapysdr::ErrorCode::StreamError,
+                message: "RX is disabled".to_string(),
+            })
+        }
     }
 
     pub fn transmit(&mut self, buffer: &[StreamType], timestamp: Option<i64>) -> Result<(), soapysdr::Error> {
-        self.tx.write_all(&[buffer], timestamp, false, 100000)
+        if let Some(tx) = &mut self.tx {
+            tx.write_all(&[buffer], timestamp, false, 100000)
+        } else {
+            Err(soapysdr::Error {
+                code: soapysdr::ErrorCode::StreamError,
+                message: "TX is disabled".to_string(),
+            })
+        }
     }
 
     pub fn rx_sample_rate(&self) -> Result<f64, soapysdr::Error> {
-        self.dev.sample_rate(soapysdr::Direction::Rx, self.rx_chan)
+        self.dev.sample_rate(soapysdr::Direction::Rx, self.rx_ch)
     }
 
     pub fn tx_sample_rate(&self) -> Result<f64, soapysdr::Error> {
-        self.dev.sample_rate(soapysdr::Direction::Tx, self.tx_chan)
+        self.dev.sample_rate(soapysdr::Direction::Tx, self.tx_ch)
     }
 
     pub fn rx_center_frequency(&self) -> Result<f64, soapysdr::Error> {
-        self.dev.frequency(soapysdr::Direction::Rx, self.rx_chan)
+        self.dev.frequency(soapysdr::Direction::Rx, self.rx_ch)
     }
 
     pub fn tx_center_frequency(&self) -> Result<f64, soapysdr::Error> {
-        self.dev.frequency(soapysdr::Direction::Tx, self.tx_chan)
+        self.dev.frequency(soapysdr::Direction::Tx, self.tx_ch)
     }
 }
