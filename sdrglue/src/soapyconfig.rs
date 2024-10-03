@@ -4,6 +4,8 @@ use crate::configuration;
 type StreamType = crate::ComplexSample;
 
 struct SdrDefaults<'a> {
+    /// Name used to print which SDR was detected
+    pub name: &'a str,
     /// Receive sample rate
     pub rx_fs: f64,
     /// Transmit sample rate
@@ -12,44 +14,70 @@ struct SdrDefaults<'a> {
     pub rx_ant:   Option<&'a str>,
     /// Transmit antenna
     pub tx_ant:   Option<&'a str>,
-    /// Receive gain(s).
-    /// Use (None, gain_value) to set the overall gain.
-    /// Use ("name", gain_value) to set a specific gain element.
-    pub rx_gain:  &'a[(Option<&'a str>, f64)],
-    /// Transmit gain(s).
-    pub tx_gain:  &'a[(Option<&'a str>, f64)],
+    /// Receive gain(s)
+    pub rx_gain: &'a[&'a str],
+    /// Transmit gain(s)
+    pub tx_gain: &'a[&'a str],
 }
 
-pub const LIMESDR_DEFAULT: SdrDefaults = SdrDefaults {
+
+/// Default settings for LimeSDR
+const SDR_DEFAULTS_LIME: SdrDefaults = SdrDefaults {
+    name: "LimeSDR",
     rx_fs: 8192e3,
     tx_fs: 8192e3,
     rx_ant: Some("LNAL"),
     tx_ant: Some("BAND1"),
     rx_gain: &[
-        (Some("LNA"), 20.0),
-        (Some("TIA"), 10.0),
-        (Some("PGA"), 10.0),
+        "LNA", "20.0",
+        "TIA", "10.0",
+        "PGA", "10.0",
     ],
     tx_gain: &[
-        (Some("PAD" ), 52.0),
-        (Some("IAMP"), 3.0),
+        "PAD",  "52.0",
+        "IAMP",  "3.0",
     ],
 };
 
-pub const SXCEIVER_DEFAULT: SdrDefaults = SdrDefaults {
+/// Default settings for SXceiver
+const SDR_DEFAULTS_SX: SdrDefaults = SdrDefaults {
+    name: "SXceiver",
     rx_fs: 600e3,
     tx_fs: 600e3,
     rx_ant: Some("RX"),
     tx_ant: Some("TX"),
     rx_gain: &[
-        (Some("LNA"), 42.0),
-        (Some("PGA"), 16.0),
+        "LNA", "42.0",
+        "PGA", "16.0",
     ],
     tx_gain: &[
-        (Some("DAC"  ), 9.0),
-        (Some("MIXER"), 30.0),
+        "DAC",    "9.0",
+        "MIXER", "30.0",
     ],
 };
+
+/// Default settings for RTL-SDR
+const SDR_DEFAULTS_RTLSDR: SdrDefaults = SdrDefaults {
+    name: "RTL-SDR",
+    rx_fs: 2400e3,
+    tx_fs: 2400e3,
+    rx_ant: Some("RX"),
+    tx_ant: None,
+    rx_gain: &["40.0"],
+    tx_gain: &[],
+};
+
+/// Default settings for any other SDR
+const SDR_DEFAULTS: SdrDefaults = SdrDefaults {
+    name: "unknown SDR device",
+    rx_fs: 2048e3,
+    tx_fs: 2048e3,
+    rx_ant: None,
+    tx_ant: None,
+    rx_gain: &[],
+    tx_gain: &[],
+};
+
 
 pub struct SoapyIo {
     rx_ch:  usize,
@@ -89,51 +117,85 @@ impl SoapyIo {
         let rx_ch = cli.sdr_rx_ch;
         let tx_ch = cli.sdr_tx_ch;
 
-        let dev = soapycheck!("open SoapySDR device",
+        let mut dev = soapycheck!("open SoapySDR device",
             soapysdr::Device::new(convert_args(&cli.sdr_device)));
 
-        let rx_enabled = cli.sdr_rx_freq.is_some();
-        let tx_enabled = cli.sdr_rx_freq.is_some();
+        let rx_enabled = cli.sdr_rx_freq.is_some()
+            && (dev.num_channels(soapysdr::Direction::Rx).unwrap_or(0) > 0);
+        let tx_enabled = cli.sdr_tx_freq.is_some()
+            && (dev.num_channels(soapysdr::Direction::Tx).unwrap_or(0) > 0);
 
-        let sdr_defaults = LIMESDR_DEFAULT; // TODO: choose correct defaults
+        let sdr_defaults = match(
+            dev.driver_key()  .unwrap_or("".to_string()).as_str(),
+            dev.hardware_key().unwrap_or("".to_string()).as_str()
+        ) {
+            // TODO: other LimeSDR models
+            //("FX3", _) => &SDR_DEFAULTS_LIME,
+            (_, "LimeSDR-USB") => &SDR_DEFAULTS_LIME,
 
+            ("sx", _) => &SDR_DEFAULTS_SX,
+            (_, "sx") => &SDR_DEFAULTS_SX,
+
+            // We could also use hardware key to use different defaults
+            // for different RTL-SDR tuner chips.
+            ("RTLSDR", _) => &SDR_DEFAULTS_RTLSDR,
+
+            (_, _) => &SDR_DEFAULTS,
+        };
+        eprintln!("Using default settings for {}", sdr_defaults.name);
+
+        // If only one of RX or TX sample rates is set, use the same one for both.
+        // Some SDRs require both sample rates to be equal anyway.
+        // If none are set, use default values.
         if rx_enabled {
             soapycheck!("set RX sample rate",
-                dev.set_sample_rate(soapysdr::Direction::Rx, rx_ch, cli.sdr_rx_fs.unwrap_or(sdr_defaults.rx_fs)));
+                dev.set_sample_rate(soapysdr::Direction::Rx, rx_ch,
+                    cli.sdr_rx_fs.unwrap_or(cli.sdr_tx_fs.unwrap_or(sdr_defaults.rx_fs))));
         }
         if tx_enabled {
             soapycheck!("set TX sample rate",
-                dev.set_sample_rate(soapysdr::Direction::Tx, tx_ch, cli.sdr_tx_fs.unwrap_or(sdr_defaults.tx_fs)));
+                dev.set_sample_rate(soapysdr::Direction::Tx, tx_ch,
+                    cli.sdr_tx_fs.unwrap_or(cli.sdr_rx_fs.unwrap_or(sdr_defaults.tx_fs))));
         }
-        //TODO
-        /*
-        soapycheck!("set RX center frequency",
-            dev.set_frequency(soapysdr::Direction::Rx, conf.rx_chan, conf.rx_freq, soapysdr::Args::new()));
-        soapycheck!("set TX center frequency",
-            dev.set_frequency(soapysdr::Direction::Tx, conf.tx_chan, conf.tx_freq, soapysdr::Args::new()));
-        soapycheck!("set RX antenna",
-            dev.set_antenna(soapysdr::Direction::Rx, conf.rx_chan, conf.rx_ant));
-        soapycheck!("set TX antenna",
-            dev.set_antenna(soapysdr::Direction::Tx, conf.tx_chan, conf.tx_ant));
-        for (name, value) in conf.rx_gain {
-            if let Some(name) = name {
-                soapycheck!("set RX gain element",
-                    dev.set_gain_element(soapysdr::Direction::Rx, conf.rx_chan, name.as_bytes().to_vec(), *value));
-            } else {
-                soapycheck!("set RX overall gain",
-                    dev.set_gain(soapysdr::Direction::Rx, conf.rx_chan, *value));
+
+        if rx_enabled {
+            // If rx_enabled is true, we already know sdr_rx_freq is not None,
+            // so unwrap is fine here.
+            soapycheck!("set RX center frequency",
+            dev.set_frequency(soapysdr::Direction::Rx, rx_ch,
+                cli.sdr_rx_freq.unwrap(),
+                soapysdr::Args::new()));
+
+            if let Some(ant) =
+                if let Some(ant) = &cli.sdr_rx_ant
+                    { Some(ant.as_str()) } else { sdr_defaults.rx_ant }
+            {
+                soapycheck!("set RX antenna",
+                dev.set_antenna(soapysdr::Direction::Rx, rx_ch, ant));
             }
+
+            set_gains(&mut dev, soapysdr::Direction::Rx, rx_ch,
+                &cli.sdr_rx_gain, sdr_defaults.rx_gain)?;
         }
-        for (name, value) in conf.tx_gain {
-            if let Some(name) = name {
-                soapycheck!("set TX gain element",
-                    dev.set_gain_element(soapysdr::Direction::Tx, conf.tx_chan, name.as_bytes().to_vec(), *value));
-            } else {
-                soapycheck!("set TX overall gain",
-                    dev.set_gain(soapysdr::Direction::Tx, conf.tx_chan, *value));
+
+        if tx_enabled {
+            soapycheck!("set TX center frequency",
+            dev.set_frequency(soapysdr::Direction::Tx, tx_ch,
+                cli.sdr_tx_freq.unwrap(),
+                soapysdr::Args::new()));
+
+            if let Some(ant) =
+                if let Some(ant) = &cli.sdr_tx_ant
+                    { Some(ant.as_str()) } else { sdr_defaults.tx_ant }
+            {
+                soapycheck!("set TX antenna",
+                dev.set_antenna(soapysdr::Direction::Tx, tx_ch, ant));
             }
+
+            set_gains(&mut dev, soapysdr::Direction::Tx, tx_ch,
+                &cli.sdr_tx_gain, sdr_defaults.tx_gain)?;
         }
-        */
+
         let mut rx = if rx_enabled {
             Some(soapycheck!("setup RX stream",
                 dev.rx_stream_args(&[rx_ch], convert_args(&cli.rx_args))))
@@ -201,4 +263,54 @@ impl SoapyIo {
     pub fn tx_center_frequency(&self) -> Result<f64, soapysdr::Error> {
         self.dev.frequency(soapysdr::Direction::Tx, self.tx_ch)
     }
+}
+
+
+/// Parse gains from command line and set them
+fn set_gains(
+    dev: &mut soapysdr::Device,
+    direction: soapysdr::Direction,
+    channel: usize,
+    cli_gains: &Vec<String>,
+    defaults: &[&str]
+) -> Result<(), soapysdr::Error> {
+    // Clap uses String but that cannot be used in default structs,
+    // so we need some extra conversion here to make them the same type.
+    // Maybe there would be some cleaner way to do it.
+    let gains: &[String] = if cli_gains.len() > 0 {
+        &cli_gains[..]
+    } else {
+        &defaults.iter().map(|g| g.to_string()).collect::<Vec<String>>()[..]
+    };
+
+    let element_gains = if gains.len() % 2 == 1 {
+        // Odd number: use first one to set overall gain,
+        // others as pairs to set gain elements if given.
+        match gains[0].parse::<f64>() {
+            Ok(gain) => {
+                soapycheck!("set overall gain",
+                dev.set_gain(direction, channel, gain));
+            }
+            Err(err) => {
+                eprintln!("Error parsing overall gain value {}: {}", gains[0], err);
+            }
+        }
+        &gains[1..]
+    } else {
+        gains
+    };
+
+    for element in element_gains.chunks_exact(2) {
+        match element[1].parse::<f64>() {
+            Ok(gain) => {
+                soapycheck!("set element gain",
+                dev.set_gain_element(direction, channel, element[0].as_str(), gain));
+            }
+            Err(err) => {
+                eprintln!("Error parsing element gain value {}: {}", element[1], err);
+            }
+        }
+    }
+
+    Ok(())
 }
