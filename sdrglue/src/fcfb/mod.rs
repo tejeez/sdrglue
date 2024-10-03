@@ -13,6 +13,8 @@ mod sweep;
 #[derive(Copy, Clone)]
 pub struct AnalysisInputParameters {
     pub fft_size: usize,
+    pub input_sample_rate: f64,
+    pub input_center_frequency: f64,
 }
 
 #[derive(Copy, Clone)]
@@ -121,6 +123,35 @@ pub struct AnalysisOutputParameters {
     pub weights: Rc<[Sample]>,
 }
 
+impl AnalysisOutputParameters {
+    /// Design analysis bank output parameters
+    /// for a given output sample rate and frequency.
+    pub fn for_frequency(
+        analysis_in_params: AnalysisInputParameters,
+        output_sample_rate: f64,
+        output_center_frequency: f64,
+        // TODO: add optional passband_width and transition_band_width if needed
+    ) -> Self {
+        let ifft_size = (
+            output_sample_rate
+            * analysis_in_params.fft_size as f64
+            / analysis_in_params.input_sample_rate
+        ).round() as usize;
+
+        let center_bin = ((
+            (output_center_frequency - analysis_in_params.input_center_frequency)
+            * analysis_in_params.fft_size as f64
+            / analysis_in_params.input_sample_rate
+        ).round() as isize
+        ).rem_euclid(analysis_in_params.fft_size as isize);
+
+        Self {
+            center_bin,
+            weights: raised_cosine_weights(ifft_size, None, None),
+        }
+    }
+}
+
 pub struct AnalysisOutputProcessor {
     input_parameters: AnalysisInputParameters,
     parameters: AnalysisOutputParameters,
@@ -166,6 +197,19 @@ impl AnalysisOutputProcessor {
 
         // Fixed overlap factor of 50% for now
         &self.buffer[ifft_size/4 .. ifft_size/4 * 3]
+    }
+
+    pub fn new_with_frequency(
+        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        analysis_in_params: AnalysisInputParameters,
+        output_sample_rate: f64,
+        output_center_frequency: f64,
+    ) -> Self {
+        AnalysisOutputProcessor::new(
+            fft_planner,
+            analysis_in_params,
+            AnalysisOutputParameters::for_frequency(analysis_in_params, output_sample_rate, output_center_frequency),
+        )
     }
 }
 

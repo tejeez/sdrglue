@@ -23,20 +23,14 @@ impl RxChannel {
     fn new(
         fft_planner: &mut rustfft::FftPlanner<Sample>,
         analysis_in_params: fcfb::AnalysisInputParameters,
-        sdr_rx_sample_rate: f64,
-        sdr_rx_center_frequency: f64,
         processor: Box<dyn rxthings::RxChannelProcessor>,
     ) -> Self {
-        let ifft_size = (processor.input_sample_rate() * analysis_in_params.fft_size as f64 / sdr_rx_sample_rate).round() as usize;
-        let center_bin = ((processor.input_center_frequency() - sdr_rx_center_frequency) * analysis_in_params.fft_size as f64).round() as isize;
         Self {
-            fcfb_output: fcfb::AnalysisOutputProcessor::new(
+            fcfb_output: fcfb::AnalysisOutputProcessor::new_with_frequency(
                 fft_planner,
                 analysis_in_params,
-                fcfb::AnalysisOutputParameters {
-                    center_bin,
-                    weights: fcfb::raised_cosine_weights(ifft_size, None, None),
-                }
+                processor.input_sample_rate(),
+                processor.input_center_frequency(),
             ),
             processor,
         }
@@ -63,6 +57,8 @@ fn main() {
 
     let analysis_in_params = fcfb::AnalysisInputParameters {
         fft_size: (sdr_rx_sample_rate / bin_spacing).round() as usize,
+        input_sample_rate: sdr_rx_sample_rate,
+        input_center_frequency: sdr_rx_center_frequency,
     };
     let mut fft_planner = rustfft::FftPlanner::new();
     let mut analysis_bank = fcfb::AnalysisInputProcessor::new(&mut fft_planner, analysis_in_params);
@@ -74,8 +70,6 @@ fn main() {
         rx_processors.push(RxChannel::new(
             &mut fft_planner,
             analysis_in_params,
-            sdr_rx_sample_rate,
-            sdr_rx_center_frequency,
             Box::new(rxthings::DemodulateToUdp::new(&rxthings::DemodulateToUdpParameters {
                 center_frequency: args[1].parse().unwrap(),
                 address: args[0].as_str(),
