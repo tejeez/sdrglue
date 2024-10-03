@@ -228,7 +228,7 @@ impl SoapyIo {
     pub fn receive(&mut self, buffer: &mut [StreamType]) -> Result<soapysdr::StreamResult, soapysdr::Error> {
         if let Some(rx) = &mut self.rx {
             // TODO: implement read_exact and use that
-            rx.read_ext(&mut [buffer], soapysdr::StreamFlags::default(), None, 100000)
+            rx.read_ext(&mut [buffer], soapysdr::StreamFlags::default(), None, 1000000)
         } else {
             Err(soapysdr::Error {
                 code: soapysdr::ErrorCode::StreamError,
@@ -239,7 +239,7 @@ impl SoapyIo {
 
     pub fn transmit(&mut self, buffer: &[StreamType], timestamp: Option<i64>) -> Result<(), soapysdr::Error> {
         if let Some(tx) = &mut self.tx {
-            tx.write_all(&[buffer], timestamp, false, 100000)
+            tx.write_all(&[buffer], timestamp, false, 1000000)
         } else {
             Err(soapysdr::Error {
                 code: soapysdr::ErrorCode::StreamError,

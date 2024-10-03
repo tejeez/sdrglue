@@ -78,15 +78,28 @@ fn main() {
         ));
     }
 
+    let mut error_count = 0;
+
     loop {
         match sdr.receive(rx_buffer.prepare_for_new_samples()) {
             Ok(_rx_result) => {
+                error_count = 0;
                 let ir = analysis_bank.process(rx_buffer.buffer());
                 for processor in rx_processors.iter_mut() {
                     processor.process(ir);
                 }
             },
-            Err(_) => { break },
+            Err(err) => {
+                error_count += 1;
+                eprintln!("Error receiving from SDR ({}): {}", error_count, err);
+                // Occasional errors might sometimes occur with some SDRs
+                // even if they would still continue working.
+                // If too many reads result in an error with no valid reads
+                // in between, assume the SDR is broken and stop.
+                if error_count >= 10 {
+                    break
+                }
+            },
         }
     }
 }
