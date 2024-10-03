@@ -56,6 +56,52 @@ cargo build --release
 
 ## Run sdrglue
 
+To see a list of supported command line arguments:
+
 ```
-~/sdrglue/sdrglue/target/release/sdrglue
+~/sdrglue/sdrglue/target/release/sdrglue --help
 ```
+
+# Examples
+
+## Listen to radio
+
+To quickly test receiving something, you can try demodulating an
+FM broadcast transmission.
+Sdrglue does not currently support audio output directly
+to a sound device but you can try piping audio from an UDP socket
+to `aplay` on Linux.
+
+Start Sdrglue with something like:
+
+```
+target/release/sdrglue \
+    --sdr-device driver rtlsdr \
+    --sdr-rx-freq 88e6 \
+    --demodulate-to-udp \
+        127.0.0.1:10000 87.9e6 FM \
+        127.0.0.1:10001 88.6e6 FM
+```
+
+This example demodulates FM transmissions at 87.9 MHz and 88.6 MHz.
+If you change the demodulated frequencies, also change SDR center frequency
+accordingly so that all signals will be within the bandwidth received
+by the SDR.
+
+Pipe the audio to aplay in another terminal window:
+
+```
+nc -ul 127.0.0.1 10000 | aplay -f S16_LE -c 1 -r 48000
+```
+
+To listen to the other channel being demodulated:
+
+```
+nc -ul 127.0.0.1 10001 | aplay -f S16_LE -c 1 -r 48000
+```
+
+The audio will sound badly distorted because the FM demodulator is designed
+for narrow-band FM and has way too narrow channel filter for broadcast FM.
+Maybe try it with some amateur radio FM signals for better results.
+Maybe a broadcast FM demodulator will be added too if someone actually
+wants to use Sdrglue to listen to the radio.
