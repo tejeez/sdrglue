@@ -23,33 +23,44 @@ fn main() {
 
     let mut sdr = soapyconfig::SoapyIo::init(&cli).unwrap();
 
-    let mut rx_dsp = rx_dsp::RxDsp::new(
-        &mut fft_planner,
-        &cli,
-        sdr.rx_sample_rate().unwrap(),
-        sdr.rx_center_frequency().unwrap()
-    );
-    rx_dsp.add_processors_from_cli(&mut fft_planner, &cli);
+    let mut rx_dsp = if sdr.rx_enabled() {
+        Some(rx_dsp::RxDsp::new(
+            &mut fft_planner,
+            &cli,
+            sdr.rx_sample_rate().unwrap(),
+            sdr.rx_center_frequency().unwrap()
+        ))
+    } else {
+        None
+    };
 
     let mut error_count = 0;
 
     loop {
-        match sdr.receive(rx_dsp.prepare_input_buffer()) {
-            Ok(_rx_result) => {
-                error_count = 0;
-                rx_dsp.process();
-            },
-            Err(err) => {
-                error_count += 1;
-                eprintln!("Error receiving from SDR ({}): {}", error_count, err);
-                // Occasional errors might sometimes occur with some SDRs
-                // even if they would still continue working.
-                // If too many reads result in an error with no valid reads
-                // in between, assume the SDR is broken and stop.
-                if error_count >= 10 {
-                    break
-                }
-            },
+        if let Some(rx_dsp) = &mut rx_dsp {
+            match sdr.receive(rx_dsp.prepare_input_buffer()) {
+                Ok(_rx_result) => {
+                    error_count = 0;
+                    rx_dsp.process();
+                },
+                Err(err) => {
+                    error_count += 1;
+                    eprintln!("Error receiving from SDR ({}): {}", error_count, err);
+                    // Occasional errors might sometimes occur with some SDRs
+                    // even if they would still continue working.
+                    // If too many reads result in an error with no valid reads
+                    // in between, assume the SDR is broken and stop.
+                    if error_count >= 10 {
+                        break
+                    }
+                },
+            }
+        }
+
+        if rx_dsp.is_none() /* && tx_dsp.is_none() */ {
+            eprintln!("RX is disabled. Nothing to do.");
+            //eprintln!("RX and TX are both disabled. Nothing to do.");
+            break;
         }
     }
 }

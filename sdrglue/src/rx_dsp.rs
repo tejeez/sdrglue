@@ -1,6 +1,6 @@
 
 use rustfft;
-use crate::{Sample, ComplexSample, sample_consts};
+use crate::{Sample, ComplexSample};
 use crate::configuration;
 use crate::fcfb;
 use crate::rxthings;
@@ -64,15 +64,17 @@ impl RxDsp {
         };
         let analysis_bank = fcfb::AnalysisInputProcessor::new(fft_planner, analysis_params);
         let input_buffer = analysis_bank.make_input_buffer();
-        Self {
+        let mut self_ = Self {
             analysis_params,
             analysis_bank,
             input_buffer,
             processors: Vec::new(),
-        }
+        };
+        self_.add_processors_from_cli(fft_planner, cli);
+        self_
     }
 
-    pub fn add_processors_from_cli(
+    fn add_processors_from_cli(
         &mut self,
         fft_planner: &mut rustfft::FftPlanner<Sample>,
         cli: &configuration::Cli

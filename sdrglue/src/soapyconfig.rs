@@ -263,6 +263,14 @@ impl SoapyIo {
     pub fn tx_center_frequency(&self) -> Result<f64, soapysdr::Error> {
         self.dev.frequency(soapysdr::Direction::Tx, self.tx_ch)
     }
+
+    pub fn rx_enabled(&self) -> bool {
+        self.rx.is_some()
+    }
+
+    pub fn tx_enabled(&self) -> bool {
+        self.tx.is_some()
+    }
 }
 
 
