@@ -86,7 +86,13 @@ impl RxDsp {
                 Box::new(rxthings::DemodulateToUdp::new(&rxthings::DemodulateToUdpParameters {
                     center_frequency: args[1].parse().unwrap(),
                     address: args[0].as_str(),
-                    // TODO: different modulations
+                    modulation: match args[2].to_uppercase().as_str() {
+                        "FM"  => rxthings::Modulation::FM,
+                        "USB" => rxthings::Modulation::USB,
+                        "LSB" => rxthings::Modulation::LSB,
+                        // TODO: handle errors more nicely
+                        _ => panic!("Unknown modulation {}", args[2]),
+                    },
                 })),
             ));
         }

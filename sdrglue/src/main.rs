@@ -11,6 +11,7 @@ pub use std::f32::consts as sample_consts;
 mod configuration;
 use configuration::Parser;
 mod fcfb;
+mod filter;
 mod rx_dsp;
 mod tx_dsp;
 mod rxthings;
