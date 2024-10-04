@@ -93,7 +93,7 @@ impl RxChannelProcessor for DemodulateToUdp {
                 },
                 Modulation::USB | Modulation::LSB => {
                     // TODO: second mixer of Weaver method
-                    filtered.re
+                    filtered.re * full_scale
                 },
             };
 
