@@ -12,7 +12,9 @@ mod configuration;
 use configuration::Parser;
 mod fcfb;
 mod rx_dsp;
+mod tx_dsp;
 mod rxthings;
+mod txthings;
 mod soapyconfig;
 
 
@@ -34,13 +36,27 @@ fn main() {
         None
     };
 
+    let mut tx_dsp = if sdr.tx_enabled() {
+        Some(tx_dsp::TxDsp::new(
+            &mut fft_planner,
+            &cli,
+            sdr.tx_sample_rate().unwrap(),
+            sdr.tx_center_frequency().unwrap()
+        ))
+    } else {
+        None
+    };
+
     let mut error_count = 0;
 
     loop {
+        let mut rx_time: Option<i64> = None;
+
         if let Some(rx_dsp) = &mut rx_dsp {
             match sdr.receive(rx_dsp.prepare_input_buffer()) {
-                Ok(_rx_result) => {
+                Ok(rx_result) => {
                     error_count = 0;
+                    rx_time = rx_result.time;
                     rx_dsp.process();
                 },
                 Err(err) => {
@@ -57,9 +73,22 @@ fn main() {
             }
         }
 
-        if rx_dsp.is_none() /* && tx_dsp.is_none() */ {
-            eprintln!("RX is disabled. Nothing to do.");
-            //eprintln!("RX and TX are both disabled. Nothing to do.");
+        if let Some(tx_dsp) = &mut tx_dsp {
+            let tx_time: Option<i64> = if let Some(rx_time) = rx_time { Some(rx_time + cli.rx_tx_delay) } else { None };
+            match sdr.transmit(tx_dsp.process(), tx_time) {
+                Ok(_) => {},
+                Err(err) => {
+                    error_count += 1;
+                    eprintln!("Error transmitting to SDR ({}): {}", error_count, err);
+                    if error_count >= 10 {
+                        break
+                    }
+                }
+            }
+        }
+
+        if rx_dsp.is_none() && tx_dsp.is_none() {
+            eprintln!("RX and TX are both disabled. Nothing to do.");
             break;
         }
     }

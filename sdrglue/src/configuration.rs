@@ -61,6 +61,14 @@ pub struct Cli {
     #[arg(long, value_delimiter = ' ', num_args = 2..)]
     pub tx_args: Vec<String>,
 
+    /// If SDR supports timestamps, we can use the latest RX timestamp
+    /// to determine the next TX timestamp. This maintains a consistent
+    /// delay from RX to TX and lets us adjust transmit latency.
+    /// This is the timestamp difference in nanoseconds and roughly
+    /// determines how much signal will be kept in transmit buffer.
+    #[arg(long, default_value_t = 20000000)]
+    pub rx_tx_delay: i64,
+
     /// Spacing of FFT bins (in Hertz) for fast-convolution
     /// analysis filter bank used for received signals.
     /// All sample rates must be integer multiples of 2 * bin spacing.
