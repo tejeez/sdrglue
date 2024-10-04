@@ -10,15 +10,12 @@ use crate::num_traits::Zero;
 mod sweep;
 
 
-#[derive(Copy, Clone)]
-pub struct AnalysisInputParameters {
-    pub fft_size: usize,
-    pub input_sample_rate: f64,
-    pub input_center_frequency: f64,
-}
+// ------------------------------------------------
+// Buffering helper for both analysis and synthesis
+// ------------------------------------------------
 
 #[derive(Copy, Clone)]
-pub struct AnalysisInputBlockSize {
+pub struct InputBlockSize {
     /// Number of new input samples in each input block.
     pub new:     usize,
     /// Number of overlapping samples between consecutive blocks.
@@ -29,13 +26,13 @@ pub struct AnalysisInputBlockSize {
     pub overlap: usize,
 }
 
-pub struct AnalysisInputBuffer {
-    size: AnalysisInputBlockSize,
+pub struct InputBuffer {
+    size: InputBlockSize,
     buffer: Vec<ComplexSample>,
 }
 
-impl AnalysisInputBuffer {
-    pub fn new(size: AnalysisInputBlockSize) -> Self {
+impl InputBuffer {
+    pub fn new(size: InputBlockSize) -> Self {
         Self {
             size,
             buffer: vec![ComplexSample::ZERO; size.new + size.overlap],
@@ -55,6 +52,18 @@ impl AnalysisInputBuffer {
     pub fn buffer(&self) -> &[ComplexSample] {
         &self.buffer[..]
     }
+}
+
+
+// ----------------------------------------
+//           Analysis filter bank
+// ----------------------------------------
+
+#[derive(Copy, Clone)]
+pub struct AnalysisInputParameters {
+    pub fft_size: usize,
+    pub input_sample_rate: f64,
+    pub input_center_frequency: f64,
 }
 
 
@@ -83,16 +92,16 @@ impl AnalysisInputProcessor {
         }
     }
 
-    pub fn input_block_size(&self) -> AnalysisInputBlockSize {
+    pub fn input_block_size(&self) -> InputBlockSize {
         // Fixed overlap factor of 50% for now
-        AnalysisInputBlockSize {
+        InputBlockSize {
             new: self.parameters.fft_size / 2,
             overlap: self.parameters.fft_size / 2,
         }
     }
 
-    pub fn make_input_buffer(&self) -> AnalysisInputBuffer {
-        AnalysisInputBuffer::new(self.input_block_size())
+    pub fn make_input_buffer(&self) -> InputBuffer {
+        InputBuffer::new(self.input_block_size())
     }
 
     /// Input samples should overlap between consequent blocks.
@@ -214,6 +223,242 @@ impl AnalysisOutputProcessor {
 }
 
 
+
+
+// ----------------------------------------
+//          Synthesis filter bank
+// ----------------------------------------
+
+#[derive(Copy, Clone)]
+pub struct SynthesisOutputParameters {
+    pub ifft_size: usize,
+    /// Output sample rate of synthesis bank.
+    pub sample_rate: f64,
+    /// Output center frequency of synthesis bank.
+    pub center_frequency: f64,
+}
+
+pub struct SynthesisOutputProcessor {
+    parameters: SynthesisOutputParameters,
+    ifft_plan: Arc<dyn rustfft::Fft<Sample>>,
+    /// Buffer for FFT processing.
+    /// The buffer is used to accumulate filter bank inputs
+    /// (in frequency domain) before IFFT, and
+    /// to store output signal (in time domain) after IFFT.
+    /// buffer_state indicates what the buffer currently contains.
+    buffer: Vec<ComplexSample>,
+    buffer_state: SynthesisBufferState,
+}
+
+#[derive(PartialEq)]
+enum SynthesisBufferState {
+    /// Buffer is full of zeros.
+    /// This is the case if no inputs have been added
+    /// since the last call to process.
+    CLEAR,
+    /// Buffer contains inputs to IFFT in frequency domain,
+    /// that is, one or more inputs have been added.
+    INPUT,
+    /// Buffer contains IFFT output.
+    /// A slice of the buffer is used to return output signal.
+    OUTPUT,
+}
+
+pub struct SynthesisIntermediateResult {
+    /// Where in synthesis output IFFT input buffer
+    /// to add the input FFT results.
+    /// Output IFFT bin indexes are input FFT bin index + offset.
+    offset: usize,
+    fft_result: Vec<ComplexSample>,
+}
+
+impl SynthesisOutputProcessor {
+    pub fn new(
+        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        parameters: SynthesisOutputParameters,
+    ) -> Self {
+        Self {
+            parameters,
+            ifft_plan: fft_planner.plan_fft_inverse(parameters.ifft_size),
+            buffer: vec![ComplexSample::ZERO; parameters.ifft_size],
+            buffer_state: SynthesisBufferState::CLEAR,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        for b in self.buffer.iter_mut() {
+            *b = ComplexSample::ZERO;
+        }
+        self.buffer_state = SynthesisBufferState::CLEAR;
+    }
+
+    pub fn add(
+        &mut self,
+        intermediate_result: &SynthesisIntermediateResult,
+    ) {
+        // If previous result is still in the buffer, clear it
+        // before starting to add inputs.
+        // This happens for the first input added to a block.
+        if self.buffer_state == SynthesisBufferState::OUTPUT {
+            self.clear();
+        }
+
+        let ifft_size = self.buffer.len();
+        for (index, value) in intermediate_result.fft_result.iter().enumerate() {
+            // TODO: handle wrap-around without computing a modulo for each bin
+            self.buffer[(intermediate_result.offset + index).rem_euclid(ifft_size)] += value;
+        }
+
+        self.buffer_state = SynthesisBufferState::INPUT;
+    }
+
+    pub fn process(
+        &mut self,
+    ) -> &[ComplexSample] {
+        match self.buffer_state {
+            SynthesisBufferState::CLEAR => {
+                // No inputs have been added. Buffer is full of zeros.
+                // IFFT of zeros is still zeros, so we can skip processing
+                // and just return those zeros as the result.
+            },
+            SynthesisBufferState::INPUT => {
+                // The usual case: buffer contains some inputs and
+                // now it is time to process them to get the result.
+                self.ifft_plan.process(&mut self.buffer);
+                self.buffer_state = SynthesisBufferState::OUTPUT;
+            },
+            SynthesisBufferState::OUTPUT => {
+                // No inputs have been added since the last call to process.
+                // The buffer still contains the previous result though,
+                // so clear it and return those zeros.
+                self.clear();
+            }
+        }
+
+        let ifft_size = self.buffer.len();
+        // Fixed overlap factor of 50% for now
+        &self.buffer[ifft_size/4 .. ifft_size/4 * 3]
+    }
+}
+
+
+#[derive(Clone)]
+pub struct SynthesisInputParameters {
+    pub center_bin: isize,
+    pub weights: Rc<[Sample]>,
+}
+
+impl SynthesisInputParameters {
+    /// Design synthesis bank input parameters
+    /// for a given input sample rate and frequency.
+    pub fn for_frequency(
+        output_parameters: SynthesisOutputParameters,
+        input_sample_rate: f64,
+        input_center_frequency: f64,
+        // TODO: add optional passband_width and transition_band_width if needed
+    ) -> Self {
+        let fft_size = (
+            input_sample_rate
+            * output_parameters.ifft_size as f64
+            / output_parameters.sample_rate
+        ).round() as usize;
+
+        let center_bin = ((
+            (input_center_frequency - output_parameters.center_frequency)
+            * output_parameters.ifft_size as f64
+            / output_parameters.sample_rate
+        ).round() as isize
+        ).rem_euclid(output_parameters.ifft_size as isize);
+
+        Self {
+            center_bin,
+            weights: raised_cosine_weights(fft_size, None, None),
+        }
+    }
+}
+
+
+pub struct SynthesisInputProcessor {
+    weights: Rc<[Sample]>,
+    fft_plan: Arc<dyn rustfft::Fft<Sample>>,
+    result: SynthesisIntermediateResult,
+}
+
+impl SynthesisInputProcessor {
+    pub fn new(
+        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        output_parameters: SynthesisOutputParameters,
+        parameters: SynthesisInputParameters,
+    ) -> Self {
+        let fft_size = parameters.weights.len();
+        Self {
+            weights: parameters.weights,
+            fft_plan: fft_planner.plan_fft_forward(fft_size),
+            result: SynthesisIntermediateResult {
+                offset:
+                    (parameters.center_bin - (fft_size / 2) as isize)
+                    .rem_euclid(output_parameters.ifft_size as isize) as usize,
+                fft_result: vec![ComplexSample::ZERO; fft_size],
+            }
+        }
+    }
+
+    pub fn process(
+        &mut self,
+        input: &[ComplexSample],
+    ) -> &SynthesisIntermediateResult {
+        self.result.fft_result.copy_from_slice(input);
+        self.fft_plan.process(&mut self.result.fft_result[..]);
+
+        // Apply weights
+        for (value, weight) in self.result.fft_result.iter_mut().zip(self.weights.iter()) {
+            *value *= weight;
+        }
+
+        // Swap halves for simpler indexing when results are added
+        // to IFFT input. This might not be the most efficient way to do it.
+        let fft_size_half = self.result.fft_result.len() / 2;
+        for i in 0 .. fft_size_half {
+            self.result.fft_result.swap(i, fft_size_half + i);
+        }
+
+        &self.result
+    }
+
+    pub fn input_block_size(&self) -> InputBlockSize {
+        let fft_size = self.result.fft_result.len();
+        // Fixed overlap factor of 50% for now
+        InputBlockSize {
+            new: fft_size / 2,
+            overlap: fft_size / 2,
+        }
+    }
+
+    pub fn make_input_buffer(&self) -> InputBuffer {
+        InputBuffer::new(self.input_block_size())
+    }
+
+    pub fn new_with_frequency(
+        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        output_parameters: SynthesisOutputParameters,
+        input_sample_rate: f64,
+        input_center_frequency: f64,
+    ) -> Self {
+        Self::new(
+            fft_planner,
+            output_parameters,
+            SynthesisInputParameters::for_frequency(output_parameters, input_sample_rate, input_center_frequency),
+        )
+    }
+}
+
+
+
+// ----------------------------------------
+//          Filter bank design
+// ----------------------------------------
+
+
 /// Design raised cosine weights for a given IFFT size,
 /// passband width and transition band width (given as number of bins).
 /// Use None for default values.
@@ -255,6 +500,10 @@ pub fn raised_cosine_weights(
 }
 
 
+// ----------------------------------------
+//                 Tests
+// ----------------------------------------
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -270,6 +519,10 @@ mod tests {
         let mut sweepgen = sweep::SweepGenerator::new(sweep_length);
         let input_parameters = AnalysisInputParameters {
             fft_size: 1000,
+            input_center_frequency: 0.0,
+            // There is no test for AnalysisOutputProcessor::new_with_frequency yet,
+            // so input sample rate does not matter.
+            input_sample_rate: 10000.0,
         };
         let output_parameters = AnalysisOutputParameters {
             center_bin: 10,
@@ -295,6 +548,40 @@ mod tests {
 
             for sample in result {
                 // Write sample in little-endian interleaved format
+                let mut buf = [0u8; 8];
+                byteorder::LittleEndian::write_f32(&mut buf[0..4], sample.re);
+                byteorder::LittleEndian::write_f32(&mut buf[4..8], sample.im);
+                output_file.write_all(&buf[..]).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn test_synthesis() {
+        let mut fft_planner = rustfft::FftPlanner::new();
+        let mut sweepgen = sweep::SweepGenerator::new(100000);
+        let output_parameters = SynthesisOutputParameters {
+            ifft_size: 1000,
+            center_frequency: 0.0,
+            sample_rate: 100000.0,
+        };
+
+        let mut sy = SynthesisOutputProcessor::new(&mut fft_planner, output_parameters);
+        let mut sy_input = SynthesisInputProcessor::new_with_frequency(&mut fft_planner, output_parameters, 10000.0, 20000.0);
+
+        let mut input_buffer = sy_input.make_input_buffer();
+
+        let mut output_file = std::fs::File::create("test_results/synthesis_output.cf32").unwrap();
+
+                for _ in 0..10000 {
+            for sample in input_buffer.prepare_for_new_samples() {
+                *sample = sweepgen.sample();
+            }
+
+            sy.add(sy_input.process(input_buffer.buffer()));
+            let result = sy.process();
+
+            for sample in result {
                 let mut buf = [0u8; 8];
                 byteorder::LittleEndian::write_f32(&mut buf[0..4], sample.re);
                 byteorder::LittleEndian::write_f32(&mut buf[4..8], sample.im);
