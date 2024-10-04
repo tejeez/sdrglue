@@ -44,50 +44,99 @@ impl RxChannel {
     }
 }
 
+/// Everything related to received signal processing.
+struct RxDsp {
+    /// Input parameters for analysis filter bank.
+    analysis_params: fcfb::AnalysisInputParameters,
+    /// Analysis filter bank for received signal.
+    analysis_bank: fcfb::AnalysisInputProcessor,
+    /// Input buffer for signal from SDR to filter bank.
+    input_buffer: fcfb::InputBuffer,
+    /// Receive channel processors.
+    processors: Vec<RxChannel>,
+}
+
+impl RxDsp {
+    pub fn new(
+        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        cli: &configuration::Cli,
+        sdr_rx_sample_rate: f64,
+        sdr_rx_center_frequency: f64,
+    ) -> Self {
+        let bin_spacing = cli.rx_bin_spacing;
+
+        let analysis_params = fcfb::AnalysisInputParameters {
+            fft_size: (sdr_rx_sample_rate / bin_spacing).round() as usize,
+            sample_rate: sdr_rx_sample_rate,
+            center_frequency: sdr_rx_center_frequency,
+        };
+        let analysis_bank = fcfb::AnalysisInputProcessor::new(fft_planner, analysis_params);
+        let input_buffer = analysis_bank.make_input_buffer();
+        Self {
+            analysis_params,
+            analysis_bank,
+            input_buffer,
+            processors: Vec::new(),
+        }
+    }
+
+    pub fn add_processors_from_cli(
+        &mut self,
+        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        cli: &configuration::Cli
+    ) {
+        for args in cli.demodulate_to_udp.chunks_exact(3) {
+            self.processors.push(RxChannel::new(
+                fft_planner,
+                self.analysis_params,
+                Box::new(rxthings::DemodulateToUdp::new(&rxthings::DemodulateToUdpParameters {
+                    center_frequency: args[1].parse().unwrap(),
+                    address: args[0].as_str(),
+                    // TODO: different modulations
+                })),
+            ));
+        }
+    }
+
+    pub fn prepare_input_buffer(
+        &mut self,
+    ) -> &mut [ComplexSample] {
+        self.input_buffer.prepare_for_new_samples()
+    }
+
+    pub fn process(
+        &mut self,
+    ) {
+        let ir = self.analysis_bank.process(self.input_buffer.buffer());
+        for processor in self.processors.iter_mut() {
+            processor.process(ir);
+        }
+    }
+}
+
+
 fn main() {
     let cli = configuration::Cli::parse();
 
-    // Spacing of FCFB FFT bins in Hz
-    let bin_spacing = 500.0;
+    let mut fft_planner = rustfft::FftPlanner::new();
 
     let mut sdr = soapyconfig::SoapyIo::init(&cli).unwrap();
 
-    let sdr_rx_sample_rate = sdr.rx_sample_rate().unwrap();
-    let sdr_rx_center_frequency = sdr.rx_center_frequency().unwrap();
-
-    let analysis_in_params = fcfb::AnalysisInputParameters {
-        fft_size: (sdr_rx_sample_rate / bin_spacing).round() as usize,
-        input_sample_rate: sdr_rx_sample_rate,
-        input_center_frequency: sdr_rx_center_frequency,
-    };
-    let mut fft_planner = rustfft::FftPlanner::new();
-    let mut analysis_bank = fcfb::AnalysisInputProcessor::new(&mut fft_planner, analysis_in_params);
-    let mut rx_buffer = analysis_bank.make_input_buffer();
-
-    let mut rx_processors = Vec::<RxChannel>::new();
-
-    for args in cli.demodulate_to_udp.chunks_exact(3) {
-        rx_processors.push(RxChannel::new(
-            &mut fft_planner,
-            analysis_in_params,
-            Box::new(rxthings::DemodulateToUdp::new(&rxthings::DemodulateToUdpParameters {
-                center_frequency: args[1].parse().unwrap(),
-                address: args[0].as_str(),
-                // TODO: different modulations
-            })),
-        ));
-    }
+    let mut rx_dsp = RxDsp::new(
+        &mut fft_planner,
+        &cli,
+        sdr.rx_sample_rate().unwrap(),
+        sdr.rx_center_frequency().unwrap()
+    );
+    rx_dsp.add_processors_from_cli(&mut fft_planner, &cli);
 
     let mut error_count = 0;
 
     loop {
-        match sdr.receive(rx_buffer.prepare_for_new_samples()) {
+        match sdr.receive(rx_dsp.prepare_input_buffer()) {
             Ok(_rx_result) => {
                 error_count = 0;
-                let ir = analysis_bank.process(rx_buffer.buffer());
-                for processor in rx_processors.iter_mut() {
-                    processor.process(ir);
-                }
+                rx_dsp.process();
             },
             Err(err) => {
                 error_count += 1;

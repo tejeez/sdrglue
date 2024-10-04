@@ -62,8 +62,10 @@ impl InputBuffer {
 #[derive(Copy, Clone)]
 pub struct AnalysisInputParameters {
     pub fft_size: usize,
-    pub input_sample_rate: f64,
-    pub input_center_frequency: f64,
+    /// Input sample rate.
+    pub sample_rate: f64,
+    /// Input center frequency.
+    pub center_frequency: f64,
 }
 
 
@@ -144,13 +146,13 @@ impl AnalysisOutputParameters {
         let ifft_size = (
             output_sample_rate
             * analysis_in_params.fft_size as f64
-            / analysis_in_params.input_sample_rate
+            / analysis_in_params.sample_rate
         ).round() as usize;
 
         let center_bin = ((
-            (output_center_frequency - analysis_in_params.input_center_frequency)
+            (output_center_frequency - analysis_in_params.center_frequency)
             * analysis_in_params.fft_size as f64
-            / analysis_in_params.input_sample_rate
+            / analysis_in_params.sample_rate
         ).round() as isize
         ).rem_euclid(analysis_in_params.fft_size as isize);
 
@@ -519,10 +521,10 @@ mod tests {
         let mut sweepgen = sweep::SweepGenerator::new(sweep_length);
         let input_parameters = AnalysisInputParameters {
             fft_size: 1000,
-            input_center_frequency: 0.0,
+            center_frequency: 0.0,
             // There is no test for AnalysisOutputProcessor::new_with_frequency yet,
             // so input sample rate does not matter.
-            input_sample_rate: 10000.0,
+            sample_rate: 10000.0,
         };
         let output_parameters = AnalysisOutputParameters {
             center_bin: 10,

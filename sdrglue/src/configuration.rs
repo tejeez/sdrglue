@@ -61,6 +61,17 @@ pub struct Cli {
     #[arg(long, value_delimiter = ' ', num_args = 2..)]
     pub tx_args: Vec<String>,
 
+    /// Spacing of FFT bins (in Hertz) for fast-convolution
+    /// analysis filter bank used for received signals.
+    /// All sample rates must be integer multiples of 2 * bin spacing.
+    /// This affect severals things and should be documented better,
+    /// but for now, just keep it at the default value if unsure.
+    #[arg(long, default_value_t = 500.0)]
+    pub rx_bin_spacing: f64,
+
+    #[arg(long, default_value_t = 500.0)]
+    pub tx_bin_spacing: f64,
+
     /// Add demodulators with UDP output interface.
     /// Each demodulator takes 3 arguments:
     /// UDP destination address, frequency and modulation.
