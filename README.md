@@ -14,7 +14,7 @@ Sdrglue aims to fix these limitations, allowing "gluing" multiple
 digital mode decoder or packet radio transceiver programs simultaneously
 together with a single SDR device.
 
-Sdrglue supports sending FM demodulated audio output through an
+Sdrglue supports sending FM or SSB demodulated audio output through an
 UDP socket in a format compatible with Gqrx.
 Yes, I know, an UDP socket is not an ideal interface for the purpose,
 since it may randomly drop or reorder packets,
