@@ -71,6 +71,8 @@ pub struct AnalysisInputParameters {
 
 pub struct AnalysisIntermediateResult {
     fft_result: Vec<ComplexSample>,
+    /// Block counter to implement output phase rotation.
+    count: usize,
 }
 
 /// Fast-convolution analysis filter bank.
@@ -90,6 +92,7 @@ impl AnalysisInputProcessor {
             fft_plan: fft_planner.plan_fft_forward(parameters.fft_size),
             result: AnalysisIntermediateResult {
                 fft_result: vec![ComplexSample::ZERO; parameters.fft_size],
+                count: 1,
             }
         }
     }
@@ -124,6 +127,10 @@ impl AnalysisInputProcessor {
     ) -> &AnalysisIntermediateResult {
         self.result.fft_result.copy_from_slice(input);
         self.fft_plan.process(&mut self.result.fft_result[..]);
+
+        // With overlap factor of 50%, counting to 2 is enough.
+        self.result.count = (self.result.count + 1) % 2;
+
         &self.result
     }
 }
@@ -168,6 +175,8 @@ pub struct AnalysisOutputProcessor {
     parameters: AnalysisOutputParameters,
     ifft_plan: Arc<dyn rustfft::Fft<Sample>>,
     buffer: Vec<ComplexSample>,
+    /// Scaling factor to get unity gain in passband.
+    scaling: Sample,
 }
 
 impl AnalysisOutputProcessor {
@@ -182,6 +191,7 @@ impl AnalysisOutputProcessor {
             parameters: parameters.clone(),
             ifft_plan: fft_planner.plan_fft_inverse(ifft_size),
             buffer: vec![ComplexSample::ZERO; ifft_size],
+            scaling: 1.0 / input_parameters.fft_size as Sample,
         }
     }
 
@@ -190,6 +200,15 @@ impl AnalysisOutputProcessor {
         intermediate_result: &AnalysisIntermediateResult,
     ) -> &[ComplexSample] {
         assert!(intermediate_result.fft_result.len() == self.input_parameters.fft_size);
+
+        // Phase rotation is relatively simple for 50% overlap:
+        // if center bin index is odd,
+        // shift the phase of every second block by 180°.
+        // We can do this by negating the scaling factor.
+        let scaling =
+            if (self.parameters.center_bin % 2 == 1)
+            && (intermediate_result.count == 1)
+            { -self.scaling } else { self.scaling };
 
         let fft_size = self.input_parameters.fft_size;
         let ifft_size = self.buffer.len();
@@ -201,7 +220,7 @@ impl AnalysisOutputProcessor {
             let bin_index_in = (self.parameters.center_bin + bin_number).rem_euclid(fft_size as isize) as usize;
             let bin_index_out = bin_number.rem_euclid(ifft_size as isize) as usize;
             // Apply weight
-            self.buffer[bin_index_out] = self.parameters.weights[bin_index_out] * intermediate_result.fft_result[bin_index_in];
+            self.buffer[bin_index_out] = self.parameters.weights[bin_index_out] * intermediate_result.fft_result[bin_index_in] * scaling;
         }
 
         self.ifft_plan.process(&mut self.buffer);
@@ -250,6 +269,8 @@ pub struct SynthesisOutputProcessor {
     /// buffer_state indicates what the buffer currently contains.
     buffer: Vec<ComplexSample>,
     buffer_state: SynthesisBufferState,
+    /// Block counter to implement input phase rotation.
+    count: usize,
 }
 
 #[derive(PartialEq)]
@@ -284,6 +305,7 @@ impl SynthesisOutputProcessor {
             ifft_plan: fft_planner.plan_fft_inverse(parameters.ifft_size),
             buffer: vec![ComplexSample::ZERO; parameters.ifft_size],
             buffer_state: SynthesisBufferState::CLEAR,
+            count: 0,
         }
     }
 
@@ -305,10 +327,31 @@ impl SynthesisOutputProcessor {
             self.clear();
         }
 
+        // Phase rotation is relatively simple for 50% overlap:
+        // if center bin index is odd,
+        // shift the phase of every second block by 180°.
+        // Do it by switching between += and -= when adding
+        // inputs to the accumulator.
+        //
+        // It might be more efficient to combine this with
+        // scaling factor in input processors,
+        // but then we would need a more complex API to let them
+        // know the counter value of the output processor,
+        // or keep separate counters in each inputs processor (which
+        // would then get out of sync if input blocks are skipped).
+        let invert =
+            (intermediate_result.offset % 2 == 1)
+            && (self.count == 1);
+
         let ifft_size = self.buffer.len();
         for (index, value) in intermediate_result.fft_result.iter().enumerate() {
             // TODO: handle wrap-around without computing a modulo for each bin
-            self.buffer[(intermediate_result.offset + index).rem_euclid(ifft_size)] += value;
+            let out_index = (intermediate_result.offset + index).rem_euclid(ifft_size);
+            if invert {
+                self.buffer[out_index] -= value;
+            } else {
+                self.buffer[out_index] += value;
+            }
         }
 
         self.buffer_state = SynthesisBufferState::INPUT;
@@ -336,6 +379,9 @@ impl SynthesisOutputProcessor {
                 self.clear();
             }
         }
+
+        // With overlap factor of 50%, counting to 2 is enough.
+        self.count = (self.count + 1) % 2;
 
         let ifft_size = self.buffer.len();
         // Fixed overlap factor of 50% for now
@@ -384,6 +430,11 @@ pub struct SynthesisInputProcessor {
     weights: Rc<[Sample]>,
     fft_plan: Arc<dyn rustfft::Fft<Sample>>,
     result: SynthesisIntermediateResult,
+    /// Scaling factor for unity gain in passband.
+    /// This could be included in weights to avoid some
+    /// multiplications but that might complicate other things.
+    /// Have to think about it a bit more.
+    scaling: Sample,
 }
 
 impl SynthesisInputProcessor {
@@ -401,7 +452,8 @@ impl SynthesisInputProcessor {
                     (parameters.center_bin - (fft_size / 2) as isize)
                     .rem_euclid(output_parameters.ifft_size as isize) as usize,
                 fft_result: vec![ComplexSample::ZERO; fft_size],
-            }
+            },
+            scaling: 1.0 / (fft_size as Sample),
         }
     }
 
@@ -414,7 +466,7 @@ impl SynthesisInputProcessor {
 
         // Apply weights
         for (value, weight) in self.result.fft_result.iter_mut().zip(self.weights.iter()) {
-            *value *= weight;
+            *value = *value * weight * self.scaling;
         }
 
         // Swap halves for simpler indexing when results are added
@@ -527,7 +579,7 @@ mod tests {
             sample_rate: 10000.0,
         };
         let output_parameters = AnalysisOutputParameters {
-            center_bin: 10,
+            center_bin: 11,
             weights: raised_cosine_weights(100, None, None),
         };
         let mut an = AnalysisInputProcessor::new(&mut fft_planner, input_parameters);
@@ -569,13 +621,13 @@ mod tests {
         };
 
         let mut sy = SynthesisOutputProcessor::new(&mut fft_planner, output_parameters);
-        let mut sy_input = SynthesisInputProcessor::new_with_frequency(&mut fft_planner, output_parameters, 10000.0, 20000.0);
+        let mut sy_input = SynthesisInputProcessor::new_with_frequency(&mut fft_planner, output_parameters, 10000.0, 20100.0);
 
         let mut input_buffer = sy_input.make_input_buffer();
 
         let mut output_file = std::fs::File::create("test_results/synthesis_output.cf32").unwrap();
 
-                for _ in 0..10000 {
+        for _ in 0..2000 {
             for sample in input_buffer.prepare_for_new_samples() {
                 *sample = sweepgen.sample();
             }
