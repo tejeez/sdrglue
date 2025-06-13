@@ -5,6 +5,9 @@ use crate::ComplexSample;
 pub mod demodulator;
 pub use demodulator::*;
 
+pub mod iqrecorder;
+pub use iqrecorder::*;
+
 pub trait RxChannelProcessor {
     /// Process a block of input samples.
     fn process(&mut self, samples: &[ComplexSample]);

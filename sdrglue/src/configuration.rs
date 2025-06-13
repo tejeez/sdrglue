@@ -87,4 +87,10 @@ pub struct Cli {
     /// --demodulate-to-udp 127.0.0.1:7300 432.5e6 FM 127.0.0.1:7301 432.3e6 USB
     #[arg(long, value_delimiter = ' ', num_args = 3..)]
     pub demodulate_to_udp: Vec<String>,
+
+    /// Add I/Q file recorders.
+    /// Each recorder takes 3 arguments:
+    /// File name, sample rate and center frequency.
+    #[arg(long, value_delimiter = ' ', num_args = 3..)]
+    pub record_iq: Vec<String>,
 }

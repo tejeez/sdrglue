@@ -96,6 +96,18 @@ impl RxDsp {
                 })),
             ));
         }
+
+        for args in cli.record_iq.chunks_exact(3) {
+            self.processors.push(RxChannel::new(
+                fft_planner,
+                self.analysis_params,
+                Box::new(rxthings::RecordIq::new(&rxthings::RecordIqParameters {
+                    sample_rate: args[1].parse().unwrap(),
+                    center_frequency: args[2].parse().unwrap(),
+                    filename: args[0].as_str(),
+                })),
+            ));
+        }
     }
 
     pub fn prepare_input_buffer(
