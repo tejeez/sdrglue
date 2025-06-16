@@ -55,6 +55,60 @@ impl InputBuffer {
 }
 
 
+// -------------------------------------------
+// Common code for both analysis and synthesis
+// -------------------------------------------
+
+/// Overlap factor
+#[derive(Copy, Clone, PartialEq)]
+pub enum Overlap {
+    // Overlap factor of 1/2
+    O1_2,
+    // Overlap factor of 1/4
+    O1_4,
+}
+
+/// Overlapping amount needs to be an integer number of samples.
+/// This means FFT size must be a multiple of the denominator
+/// of overlap factor.
+fn required_fft_size_factor(overlap: Overlap) -> usize {
+    match overlap {
+        Overlap::O1_2 => 2,
+        Overlap::O1_4 => 4,
+    }
+}
+
+/// Check that FFT size is a multiple of required_fft_size_factor.
+/// For now it panics but the code could be changed to return errors too.
+fn check_fft_size(fft_size: usize, overlap: Overlap) {
+    let required = required_fft_size_factor(overlap);
+    if fft_size % required != 0 {
+        panic!("FFT size must be a multiple of {}. {} is not.", required, fft_size);
+    }
+}
+
+/// Compute input block size for a given FFT/IFFT size and overlap factor.
+fn input_block_size(fft_size: usize, overlap: Overlap) -> InputBlockSize {
+    match overlap {
+        Overlap::O1_2 => InputBlockSize {
+            new:     fft_size / 2,
+            overlap: fft_size / 2,
+        },
+        Overlap::O1_4 => InputBlockSize {
+            new:     fft_size / 4 * 3,
+            overlap: fft_size / 4,
+        },
+    }
+}
+
+fn slice_middle_samples(samples: &[ComplexSample], overlap: Overlap) -> &[ComplexSample] {
+    let len = samples.len();
+    match overlap {
+        Overlap::O1_2 => &samples[len / 4 .. len / 4 * 3],
+        Overlap::O1_4 => &samples[len / 8 .. len / 8 * 7],
+    }
+}
+
 // ----------------------------------------
 //           Analysis filter bank
 // ----------------------------------------
@@ -66,6 +120,8 @@ pub struct AnalysisInputParameters {
     pub sample_rate: f64,
     /// Input center frequency.
     pub center_frequency: f64,
+    /// Overlap factor
+    pub overlap: Overlap,
 }
 
 
@@ -87,22 +143,19 @@ impl AnalysisInputProcessor {
         fft_planner: &mut rustfft::FftPlanner<Sample>,
         parameters: AnalysisInputParameters,
     ) -> Self {
+        check_fft_size(parameters.fft_size, parameters.overlap);
         Self {
             parameters,
             fft_plan: fft_planner.plan_fft_forward(parameters.fft_size),
             result: AnalysisIntermediateResult {
                 fft_result: vec![ComplexSample::ZERO; parameters.fft_size],
-                count: 1,
+                count: 3,
             }
         }
     }
 
     pub fn input_block_size(&self) -> InputBlockSize {
-        // Fixed overlap factor of 50% for now
-        InputBlockSize {
-            new: self.parameters.fft_size / 2,
-            overlap: self.parameters.fft_size / 2,
-        }
+        input_block_size(self.parameters.fft_size, self.parameters.overlap)
     }
 
     pub fn make_input_buffer(&self) -> InputBuffer {
@@ -128,8 +181,9 @@ impl AnalysisInputProcessor {
         self.result.fft_result.copy_from_slice(input);
         self.fft_plan.process(&mut self.result.fft_result[..]);
 
-        // With overlap factor of 50%, counting to 2 is enough.
-        self.result.count = (self.result.count + 1) % 2;
+        // With overlap factor of 1/4, counting to 4 is enough.
+        // It also works for 1/2 overlap.
+        self.result.count = (self.result.count + 1) % 4;
 
         &self.result
     }
@@ -186,6 +240,7 @@ impl AnalysisOutputProcessor {
         parameters: AnalysisOutputParameters,
     ) -> Self {
         let ifft_size = parameters.weights.len();
+        check_fft_size(ifft_size, input_parameters.overlap);
         Self {
             input_parameters,
             parameters: parameters.clone(),
@@ -205,10 +260,23 @@ impl AnalysisOutputProcessor {
         // if center bin index is odd,
         // shift the phase of every second block by 180°.
         // We can do this by negating the scaling factor.
-        let scaling =
-            if (self.parameters.center_bin % 2 == 1)
-            && (intermediate_result.count == 1)
-            { -self.scaling } else { self.scaling };
+        // For 25% overlap we also need phase rotations of 90° and 270°.
+        // Set multiply_by_i to true for an additional 90° shift.
+        //
+        // Compute phase rotation where 0 = 0°, 1 = 90°, 2 = 180°, 3 = 270°.
+        // TODO: figure out whether this is correct at all
+        let phasenum = (
+            (self.parameters.center_bin.rem_euclid(4)) as u8 *
+            (intermediate_result.count.rem_euclid(4)) as u8 *
+            match self.input_parameters.overlap {
+                Overlap::O1_2 => 2,
+                Overlap::O1_4 => 1,
+            }
+        ) % 4;
+        // Convert to scaling factor and multiply_by_i value.
+        let scaling = if phasenum >= 2 { -self.scaling } else { self.scaling };
+        let multiply_by_i = phasenum % 2 == 1;
+
 
         let fft_size = self.input_parameters.fft_size;
         let ifft_size = self.buffer.len();
@@ -220,13 +288,21 @@ impl AnalysisOutputProcessor {
             let bin_index_in = (self.parameters.center_bin + bin_number).rem_euclid(fft_size as isize) as usize;
             let bin_index_out = bin_number.rem_euclid(ifft_size as isize) as usize;
             // Apply weight
-            self.buffer[bin_index_out] = self.parameters.weights[bin_index_out] * intermediate_result.fft_result[bin_index_in] * scaling;
+            let weighted = self.parameters.weights[bin_index_out] * intermediate_result.fft_result[bin_index_in] * scaling;
+            // Apply 90° phase rotation if needed.
+            // It would be a bit simpler to make scaling factor a complex number though.
+            // Doing it this way saves some multiplications,
+            // but not sure if it is really any faster.
+            self.buffer[bin_index_out] = if multiply_by_i {
+                ComplexSample { re: -weighted.im, im: weighted.re }
+            } else {
+                weighted
+            }
         }
 
         self.ifft_plan.process(&mut self.buffer);
 
-        // Fixed overlap factor of 50% for now
-        &self.buffer[ifft_size/4 .. ifft_size/4 * 3]
+        slice_middle_samples(&self.buffer, self.input_parameters.overlap)
     }
 
     pub fn new_with_frequency(
@@ -257,6 +333,8 @@ pub struct SynthesisOutputParameters {
     pub sample_rate: f64,
     /// Output center frequency of synthesis bank.
     pub center_frequency: f64,
+    /// Overlap factor
+    pub overlap: Overlap,
 }
 
 pub struct SynthesisOutputProcessor {
@@ -300,6 +378,7 @@ impl SynthesisOutputProcessor {
         fft_planner: &mut rustfft::FftPlanner<Sample>,
         parameters: SynthesisOutputParameters,
     ) -> Self {
+        check_fft_size(parameters.ifft_size, parameters.overlap);
         Self {
             parameters,
             ifft_plan: fft_planner.plan_fft_inverse(parameters.ifft_size),
@@ -342,6 +421,9 @@ impl SynthesisOutputProcessor {
         let invert =
             (intermediate_result.offset % 2 == 1)
             && (self.count == 1);
+        // TODO: phase rotation for 1/4 overlap.
+        // If it works correctly for analysis, maybe move some of the code
+        // to a common function used here too.
 
         let ifft_size = self.buffer.len();
         for (index, value) in intermediate_result.fft_result.iter().enumerate() {
@@ -380,12 +462,9 @@ impl SynthesisOutputProcessor {
             }
         }
 
-        // With overlap factor of 50%, counting to 2 is enough.
-        self.count = (self.count + 1) % 2;
+        self.count = (self.count + 1) % 4;
 
-        let ifft_size = self.buffer.len();
-        // Fixed overlap factor of 50% for now
-        &self.buffer[ifft_size/4 .. ifft_size/4 * 3]
+        slice_middle_samples(&self.buffer, self.parameters.overlap)
     }
 }
 
@@ -444,6 +523,7 @@ impl SynthesisInputProcessor {
         parameters: SynthesisInputParameters,
     ) -> Self {
         let fft_size = parameters.weights.len();
+        check_fft_size(fft_size, output_parameters.overlap);
         Self {
             weights: parameters.weights,
             fft_plan: fft_planner.plan_fft_forward(fft_size),
@@ -577,6 +657,7 @@ mod tests {
             // There is no test for AnalysisOutputProcessor::new_with_frequency yet,
             // so input sample rate does not matter.
             sample_rate: 10000.0,
+            overlap: Overlap::O1_4,
         };
         let output_parameters = AnalysisOutputParameters {
             center_bin: 11,
@@ -618,6 +699,7 @@ mod tests {
             ifft_size: 1000,
             center_frequency: 0.0,
             sample_rate: 100000.0,
+            overlap: Overlap::O1_2,
         };
 
         let mut sy = SynthesisOutputProcessor::new(&mut fft_planner, output_parameters);

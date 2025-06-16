@@ -61,6 +61,7 @@ impl RxDsp {
             fft_size: (sdr_rx_sample_rate / bin_spacing).round() as usize,
             sample_rate: sdr_rx_sample_rate,
             center_frequency: sdr_rx_center_frequency,
+            overlap: fcfb::Overlap::O1_2, // TODO: make it configurable
         };
         let analysis_bank = fcfb::AnalysisInputProcessor::new(fft_planner, analysis_params);
         let input_buffer = analysis_bank.make_input_buffer();
