@@ -113,6 +113,24 @@ fn slice_middle_samples(samples: &[ComplexSample], overlap: Overlap) -> &[Comple
     }
 }
 
+/// Compute phase rotation for a given center bin number, block counter and overlap factor.
+/// All bins in a block will be phase shifted by the amount returned.
+/// Return value is a number from 0 to 3, where:
+/// 0 means 0° phase shift. Values are not affected.
+/// 1 means 90° phase shift. Values are multipled by i.
+/// 2 means 180° phase shift. Values are multipled by -1.
+/// 3 means 270° phase shift. Values are multipled by -i.
+fn get_phase_rotation(center_bin: isize, block_count: usize, overlap: Overlap) -> i8 {
+    (
+        center_bin.rem_euclid(4) as i8 *
+        block_count.rem_euclid(4) as i8 *
+        match overlap {
+            Overlap::O1_2 => 2,
+            Overlap::O1_4 => 1,
+        }
+    ).rem_euclid(4)
+}
+
 // ----------------------------------------
 //           Analysis filter bank
 // ----------------------------------------
@@ -260,23 +278,9 @@ impl AnalysisOutputProcessor {
     ) -> &[ComplexSample] {
         assert!(intermediate_result.fft_result.len() == self.input_parameters.fft_size);
 
-        // Phase rotation is relatively simple for 50% overlap:
-        // if center bin index is odd,
-        // shift the phase of every second block by 180°.
-        // We can do this by negating the scaling factor.
-        // For 25% overlap we also need phase rotations of 90° and 270°.
-        // Set multiply_by_i to true for an additional 90° shift.
-        //
-        // Compute phase rotation where 0 = 0°, 1 = 90°, 2 = 180°, 3 = 270°.
-        // TODO: figure out whether this is correct at all
-        let phasenum = (
-            self.parameters.center_bin.rem_euclid(4) as i8 *
-            intermediate_result.count.rem_euclid(4) as i8 *
-            match self.input_parameters.overlap {
-                Overlap::O1_2 => 2,
-                Overlap::O1_4 => 1,
-            }
-        ).rem_euclid(4);
+        let phasenum = get_phase_rotation(
+            self.parameters.center_bin, intermediate_result.count, self.input_parameters.overlap);
+
         // Convert to scaling factor and multiply_by_i value.
         let scaling = if phasenum >= 2 { -self.scaling } else { self.scaling };
         let multiply_by_i = phasenum % 2 == 1;
@@ -383,6 +387,9 @@ pub struct SynthesisIntermediateResult {
     /// to add the input FFT results.
     /// Output IFFT bin indexes are input FFT bin index + offset.
     offset: usize,
+    /// This is a bit redundant since offset contains the information
+    /// already, but it simplifies phase code rotation for now, maybe...
+    center_bin: isize,
     fft_result: Vec<ComplexSample>,
 }
 
@@ -419,11 +426,7 @@ impl SynthesisOutputProcessor {
             self.clear();
         }
 
-        // Phase rotation is relatively simple for 50% overlap:
-        // if center bin index is odd,
-        // shift the phase of every second block by 180°.
-        // Do it by switching between += and -= when adding
-        // inputs to the accumulator.
+        // Compute phase rotation.
         //
         // It might be more efficient to combine this with
         // scaling factor in input processors,
@@ -431,21 +434,33 @@ impl SynthesisOutputProcessor {
         // know the counter value of the output processor,
         // or keep separate counters in each inputs processor (which
         // would then get out of sync if input blocks are skipped).
-        let invert =
-            (intermediate_result.offset % 2 == 1)
-            && (self.count == 1);
-        // TODO: phase rotation for 1/4 overlap.
-        // If it works correctly for analysis, maybe move some of the code
-        // to a common function used here too.
+        //
+        // It might actually be more better to pass block counter
+        // value to input processors and move the counting outside
+        // of the FCFB implementation, since then a caller could
+        // also skip synthesizing blocks if needed.
+        let phasenum = get_phase_rotation(intermediate_result.center_bin, self.count, self.parameters.overlap);
 
         let ifft_size = self.buffer.len();
         for (index, value) in intermediate_result.fft_result.iter().enumerate() {
             // TODO: handle wrap-around without computing a modulo for each bin
             let out_index = (intermediate_result.offset + index).rem_euclid(ifft_size);
-            if invert {
-                self.buffer[out_index] -= value;
-            } else {
-                self.buffer[out_index] += value;
+
+            // Rotate phase if needed.
+            // Or would be faster to just multiply by a complex number
+            // to do the phase rotation here?
+            match phasenum {
+                0 => self.buffer[out_index] += value,
+                1 => {
+                    self.buffer[out_index].re += value.im;
+                    self.buffer[out_index].im -= value.re;
+                },
+                2 => self.buffer[out_index] -= value,
+                3 => {
+                    self.buffer[out_index].re -= value.im;
+                    self.buffer[out_index].im += value.re;
+                },
+                _ => panic!("Bug"),
             }
         }
 
@@ -527,6 +542,7 @@ pub struct SynthesisInputProcessor {
     /// multiplications but that might complicate other things.
     /// Have to think about it a bit more.
     scaling: Sample,
+    overlap: Overlap,
 }
 
 impl SynthesisInputProcessor {
@@ -544,9 +560,11 @@ impl SynthesisInputProcessor {
                 offset:
                     (parameters.center_bin - (fft_size / 2) as isize)
                     .rem_euclid(output_parameters.ifft_size as isize) as usize,
+                center_bin: parameters.center_bin,
                 fft_result: vec![ComplexSample::ZERO; fft_size],
             },
             scaling: 1.0 / (fft_size as Sample),
+            overlap: output_parameters.overlap,
         }
     }
 
@@ -573,12 +591,7 @@ impl SynthesisInputProcessor {
     }
 
     pub fn input_block_size(&self) -> InputBlockSize {
-        let fft_size = self.result.fft_result.len();
-        // Fixed overlap factor of 50% for now
-        InputBlockSize {
-            new: fft_size / 2,
-            overlap: fft_size / 2,
-        }
+        input_block_size(self.result.fft_result.len(), self.overlap)
     }
 
     pub fn make_input_buffer(&self) -> InputBuffer {
@@ -720,11 +733,11 @@ mod tests {
             ifft_size: 1000,
             center_frequency: 0.0,
             sample_rate: 100000.0,
-            overlap: Overlap::O1_2,
+            overlap: Overlap::O1_4,
         };
 
         let mut sy = SynthesisOutputProcessor::new(&mut fft_planner, output_parameters);
-        let mut sy_input = SynthesisInputProcessor::new_with_frequency(&mut fft_planner, output_parameters, 10000.0, 20100.0);
+        let mut sy_input = SynthesisInputProcessor::new_with_frequency(&mut fft_planner, output_parameters, 9600.0, 100.0);
 
         let mut input_buffer = sy_input.make_input_buffer();
 
