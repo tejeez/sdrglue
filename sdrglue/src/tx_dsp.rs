@@ -65,7 +65,7 @@ impl TxDsp {
             ifft_size: (sdr_tx_sample_rate / bin_spacing).round() as usize,
             sample_rate: sdr_tx_sample_rate,
             center_frequency: sdr_tx_center_frequency,
-            overlap: fcfb::Overlap::O1_2, // TODO: make it configurable
+            overlap: if cli.rx_overlap == "1/4" { fcfb::Overlap::O1_4 } else { fcfb::Overlap::O1_2 },
         };
         let synth_bank = fcfb::SynthesisOutputProcessor::new(fft_planner, synth_params);
 

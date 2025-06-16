@@ -1,5 +1,21 @@
 
 pub use clap::Parser;
+use crate::fcfb;
+
+// Ok, parsing to enum with clap seems like too much effort to implement.
+// Let's use a string for now.
+/*struct Error;
+impl std::str::FromStr for fcfb::Overlap {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "1/2" => Ok(fcfb::Overlap::O1_2),
+            "1/4" => Ok(fcfb::Overlap::O1_4),
+            _ => Err(Error),
+        }
+    }
+}*/
+
 
 #[derive(Parser)]
 pub struct Cli {
@@ -71,7 +87,8 @@ pub struct Cli {
 
     /// Spacing of FFT bins (in Hertz) for fast-convolution
     /// analysis filter bank used for received signals.
-    /// All sample rates must be integer multiples of 2 * bin spacing.
+    /// All sample rates must be integer multiples of 2 * bin spacing
+    /// (for overlap factor 1/2) or 4 * bin spacing (for overlap factor 1/4).
     /// This affect severals things and should be documented better,
     /// but for now, just keep it at the default value if unsure.
     #[arg(long, default_value_t = 500.0)]
@@ -79,6 +96,19 @@ pub struct Cli {
 
     #[arg(long, default_value_t = 500.0)]
     pub tx_bin_spacing: f64,
+
+    /// FFT overlap factor for fast-convolution filter bank.
+    /// 1/4 results in less CPU use but more spurious products than 1/2.
+    #[arg(long, default_value = "1/2")]
+    pub rx_overlap: String,
+    // TODO: maybe consider using enum here
+    //#[arg(long, default_value_t = fcfb::Overlap::O1_2)]
+    //pub rx_overlap: fcfb::Overlap, // TODO?
+
+    #[arg(long, default_value = "1/2")]
+    pub tx_overlap: String,
+    //#[arg(long, default_value_t = fcfb::Overlap::O1_2)]
+    //pub tx_overlap: fcfb::Overlap, // TODO?
 
     /// Add demodulators with UDP output interface.
     /// Each demodulator takes 3 arguments:
