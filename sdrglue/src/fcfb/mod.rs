@@ -72,6 +72,10 @@ pub enum Overlap {
 /// This means FFT size must be a multiple of the denominator
 /// of overlap factor.
 fn required_fft_size_factor(overlap: Overlap) -> usize {
+    // Actually I just realized it should be multiplied by 2 for now
+    // because of the way slice_middle_samples is implemented.
+    // Remove this once slice_middle_samples is fixed.
+    2 *
     match overlap {
         Overlap::O1_2 => 2,
         Overlap::O1_4 => 4,
@@ -219,7 +223,7 @@ impl AnalysisOutputParameters {
 
         Self {
             center_bin,
-            weights: raised_cosine_weights(ifft_size, None, None),
+            weights: raised_cosine_weights(ifft_size, None, None, analysis_in_params.overlap),
         }
     }
 }
@@ -266,16 +270,25 @@ impl AnalysisOutputProcessor {
         // Compute phase rotation where 0 = 0°, 1 = 90°, 2 = 180°, 3 = 270°.
         // TODO: figure out whether this is correct at all
         let phasenum = (
-            (self.parameters.center_bin.rem_euclid(4)) as u8 *
-            (intermediate_result.count.rem_euclid(4)) as u8 *
+            self.parameters.center_bin.rem_euclid(4) as i8 *
+            intermediate_result.count.rem_euclid(4) as i8 *
             match self.input_parameters.overlap {
                 Overlap::O1_2 => 2,
                 Overlap::O1_4 => 1,
             }
-        ) % 4;
+        ).rem_euclid(4);
         // Convert to scaling factor and multiply_by_i value.
         let scaling = if phasenum >= 2 { -self.scaling } else { self.scaling };
         let multiply_by_i = phasenum % 2 == 1;
+
+        // Or should we just make scaling factor a complex number?
+        /*let scaling = self.scaling * match phasenum {
+            0 => ComplexSample { re:  1.0, im:  0.0 },
+            1 => ComplexSample { re:  0.0, im:  1.0 },
+            2 => ComplexSample { re: -1.0, im:  0.0 },
+            3 => ComplexSample { re:  0.0, im: -1.0 },
+            _ => panic!("Bug"),
+        };*/
 
 
         let fft_size = self.input_parameters.fft_size;
@@ -290,14 +303,14 @@ impl AnalysisOutputProcessor {
             // Apply weight
             let weighted = self.parameters.weights[bin_index_out] * intermediate_result.fft_result[bin_index_in] * scaling;
             // Apply 90° phase rotation if needed.
-            // It would be a bit simpler to make scaling factor a complex number though.
-            // Doing it this way saves some multiplications,
-            // but not sure if it is really any faster.
             self.buffer[bin_index_out] = if multiply_by_i {
                 ComplexSample { re: -weighted.im, im: weighted.re }
             } else {
                 weighted
             }
+
+            // Or should we just make scaling factor a complex number?
+            //self.buffer[bin_index_out] = self.parameters.weights[bin_index_out] * intermediate_result.fft_result[bin_index_in] * scaling;
         }
 
         self.ifft_plan.process(&mut self.buffer);
@@ -499,7 +512,7 @@ impl SynthesisInputParameters {
 
         Self {
             center_bin,
-            weights: raised_cosine_weights(fft_size, None, None),
+            weights: raised_cosine_weights(fft_size, None, None, output_parameters.overlap),
         }
     }
 }
@@ -596,19 +609,27 @@ impl SynthesisInputProcessor {
 /// Design raised cosine weights for a given IFFT size,
 /// passband width and transition band width (given as number of bins).
 /// Use None for default values.
+/// Default transition band width depends on overlap factor.
+/// Maybe a separate function with defaults would be better
+/// since now the overlap parameter is useless if defaults are not used.
 pub fn raised_cosine_weights(
     ifft_size: usize,
     passband_bins: Option<usize>,
     transition_bins: Option<usize>,
+    overlap: Overlap,
 ) -> Rc<[Sample]> {
     // I am not sure if it this would work correctly for an odd size,
-    // but an overlap factor of 1/2 requires an even IFFT size anyway,
-    // so check for that.
+    // but currently supported overlap factors needs an even IFFT size anyway.
     // Maybe returning an error instead of panicing with invalid values
     // would be better though.
     assert!(ifft_size % 2 == 0);
 
-    let default_max_transition = 15;
+    let default_max_transition = match overlap {
+        Overlap::O1_2 => 15,
+        // Smaller overlap factor needs a wider transition band
+        // for similar level of spurious products.
+        Overlap::O1_4 => 31,
+    };
     let transition_bins_ = transition_bins.unwrap_or(default_max_transition.min(ifft_size/2 - 1));
     let passband_half = passband_bins.unwrap_or(ifft_size - 2 - 2*transition_bins_) / 2 + 1;
 
@@ -661,7 +682,7 @@ mod tests {
         };
         let output_parameters = AnalysisOutputParameters {
             center_bin: 11,
-            weights: raised_cosine_weights(100, None, None),
+            weights: raised_cosine_weights(96, None, None, input_parameters.overlap),
         };
         let mut an = AnalysisInputProcessor::new(&mut fft_planner, input_parameters);
         let mut an_output = AnalysisOutputProcessor::new(&mut fft_planner, input_parameters, output_parameters);
@@ -733,7 +754,7 @@ mod tests {
             passband_bins: Option<usize>,
             transition_bins: Option<usize>,
         ) {
-            let weights = raised_cosine_weights(ifft_size, passband_bins, transition_bins);
+            let weights = raised_cosine_weights(ifft_size, passband_bins, transition_bins, Overlap::O1_2);
             println!("{:?}", weights);
             // Check that "DC" bin is 1.0
             assert!(weights[0] == 1.0);
