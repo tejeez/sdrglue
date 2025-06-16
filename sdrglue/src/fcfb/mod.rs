@@ -72,10 +72,6 @@ pub enum Overlap {
 /// This means FFT size must be a multiple of the denominator
 /// of overlap factor.
 fn required_fft_size_factor(overlap: Overlap) -> usize {
-    // Actually I just realized it should be multiplied by 2 for now
-    // because of the way slice_middle_samples is implemented.
-    // Remove this once slice_middle_samples is fixed.
-    2 *
     match overlap {
         Overlap::O1_2 => 2,
         Overlap::O1_4 => 4,
@@ -107,10 +103,11 @@ fn input_block_size(fft_size: usize, overlap: Overlap) -> InputBlockSize {
 
 fn slice_middle_samples(samples: &[ComplexSample], overlap: Overlap) -> &[ComplexSample] {
     let len = samples.len();
-    match overlap {
-        Overlap::O1_2 => &samples[len / 4 .. len / 4 * 3],
-        Overlap::O1_4 => &samples[len / 8 .. len / 8 * 7],
-    }
+    let (first_sample, n_samples) = match overlap {
+        Overlap::O1_2 => ((len + 2) / 4, len / 2),
+        Overlap::O1_4 => ((len + 4) / 8, len / 4 * 3),
+    };
+    &samples[first_sample .. first_sample + n_samples]
 }
 
 /// Compute phase rotation for a given center bin number, block counter and overlap factor.
@@ -695,7 +692,7 @@ mod tests {
         };
         let output_parameters = AnalysisOutputParameters {
             center_bin: 11,
-            weights: raised_cosine_weights(96, None, None, input_parameters.overlap),
+            weights: raised_cosine_weights(100, None, None, input_parameters.overlap),
         };
         let mut an = AnalysisInputProcessor::new(&mut fft_planner, input_parameters);
         let mut an_output = AnalysisOutputProcessor::new(&mut fft_planner, input_parameters, output_parameters);
