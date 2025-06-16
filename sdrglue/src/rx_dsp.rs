@@ -23,6 +23,8 @@ impl RxChannel {
                 analysis_in_params,
                 processor.input_sample_rate(),
                 processor.input_center_frequency(),
+                // TODO: maybe add processor.minimum_input_bandwidth()
+                None
             ),
             processor,
         }

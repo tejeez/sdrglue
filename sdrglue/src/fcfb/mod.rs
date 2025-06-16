@@ -217,11 +217,13 @@ pub struct AnalysisOutputParameters {
 impl AnalysisOutputParameters {
     /// Design analysis bank output parameters
     /// for a given output sample rate and frequency.
+    /// If bandwidth is given, it will determine the width
+    /// of the flat part of the frequency response.
     pub fn for_frequency(
         analysis_in_params: AnalysisInputParameters,
         output_sample_rate: f64,
         output_center_frequency: f64,
-        // TODO: add optional passband_width and transition_band_width if needed
+        bandwidth: Option<f64>,
     ) -> Self {
         let ifft_size = (
             output_sample_rate
@@ -238,7 +240,16 @@ impl AnalysisOutputParameters {
 
         Self {
             center_bin,
-            weights: raised_cosine_weights(ifft_size, None, None, analysis_in_params.overlap),
+            weights: raised_cosine_weights_default(
+                ifft_size,
+                bandwidth.map(|bandwidth|
+                    (bandwidth
+                     * analysis_in_params.fft_size as f64
+                     / analysis_in_params.sample_rate)
+                    .round() as usize
+                ),
+                None,
+                analysis_in_params.overlap),
         }
     }
 }
@@ -324,11 +335,12 @@ impl AnalysisOutputProcessor {
         analysis_in_params: AnalysisInputParameters,
         output_sample_rate: f64,
         output_center_frequency: f64,
+        bandwidth: Option<f64>,
     ) -> Self {
         AnalysisOutputProcessor::new(
             fft_planner,
             analysis_in_params,
-            AnalysisOutputParameters::for_frequency(analysis_in_params, output_sample_rate, output_center_frequency),
+            AnalysisOutputParameters::for_frequency(analysis_in_params, output_sample_rate, output_center_frequency, bandwidth),
         )
     }
 }
@@ -507,7 +519,7 @@ impl SynthesisInputParameters {
         output_parameters: SynthesisOutputParameters,
         input_sample_rate: f64,
         input_center_frequency: f64,
-        // TODO: add optional passband_width and transition_band_width if needed
+        bandwidth: Option<f64>,
     ) -> Self {
         let fft_size = (
             input_sample_rate
@@ -524,7 +536,16 @@ impl SynthesisInputParameters {
 
         Self {
             center_bin,
-            weights: raised_cosine_weights(fft_size, None, None, output_parameters.overlap),
+            weights: raised_cosine_weights_default(
+                fft_size,
+                bandwidth.map(|bandwidth|
+                    (bandwidth
+                     * output_parameters.ifft_size as f64
+                     / output_parameters.sample_rate)
+                    .round() as usize
+                ),
+                None,
+                output_parameters.overlap),
         }
     }
 }
@@ -600,11 +621,12 @@ impl SynthesisInputProcessor {
         output_parameters: SynthesisOutputParameters,
         input_sample_rate: f64,
         input_center_frequency: f64,
+        bandwidth: Option<f64>,
     ) -> Self {
         Self::new(
             fft_planner,
             output_parameters,
-            SynthesisInputParameters::for_frequency(output_parameters, input_sample_rate, input_center_frequency),
+            SynthesisInputParameters::for_frequency(output_parameters, input_sample_rate, input_center_frequency, bandwidth),
         )
     }
 }
@@ -618,15 +640,10 @@ impl SynthesisInputProcessor {
 
 /// Design raised cosine weights for a given IFFT size,
 /// passband width and transition band width (given as number of bins).
-/// Use None for default values.
-/// Default transition band width depends on overlap factor.
-/// Maybe a separate function with defaults would be better
-/// since now the overlap parameter is useless if defaults are not used.
 pub fn raised_cosine_weights(
     ifft_size: usize,
-    passband_bins: Option<usize>,
-    transition_bins: Option<usize>,
-    overlap: Overlap,
+    passband_bins: usize,
+    transition_bins: usize,
 ) -> Rc<[Sample]> {
     // I am not sure if it this would work correctly for an odd size,
     // but currently supported overlap factors needs an even IFFT size anyway.
@@ -634,16 +651,9 @@ pub fn raised_cosine_weights(
     // would be better though.
     assert!(ifft_size % 2 == 0);
 
-    let default_max_transition = match overlap {
-        Overlap::O1_2 => 15,
-        // Smaller overlap factor needs a wider transition band
-        // for similar level of spurious products.
-        Overlap::O1_4 => 31,
-    };
-    let transition_bins_ = transition_bins.unwrap_or(default_max_transition.min(ifft_size/2 - 1));
-    let passband_half = passband_bins.unwrap_or(ifft_size - 2 - 2*transition_bins_) / 2 + 1;
+    let passband_half = passband_bins / 2 + 1;
 
-    assert!(passband_half + transition_bins_ <= ifft_size/2);
+    assert!(passband_half + transition_bins <= ifft_size/2);
 
     let mut weights = vec![Sample::zero(); ifft_size];
     for i in 0 .. passband_half {
@@ -652,8 +662,8 @@ pub fn raised_cosine_weights(
             weights[ifft_size - i] = 1.0;
         }
     }
-    for i in 0 .. transition_bins_ {
-        let v = 0.5 + 0.5 * (sample_consts::PI * (i+1) as Sample / (transition_bins_+1) as Sample).cos();
+    for i in 0 .. transition_bins {
+        let v = 0.5 + 0.5 * (sample_consts::PI * (i+1) as Sample / (transition_bins+1) as Sample).cos();
         let j = passband_half + i;
         weights[j] = v;
         if j != 0 {
@@ -662,6 +672,47 @@ pub fn raised_cosine_weights(
     }
 
     Rc::<[Sample]>::from(weights)
+}
+
+/// Design raised cosine weights for a given IFFT size,
+/// passband width and transition band width (given as number of bins).
+/// Use None for default values.
+///
+/// If passband_bins is Some and transition_bins is None (i.e. default),
+/// transition band will be made as wide as possible.
+/// This minimizes spurious products.
+///
+/// If passband_bins is None (i.e. default) and transition_bins is Some,
+/// passband will be made as wide as possible.
+///
+/// If both are None, transition band width will get a default value
+/// depending on overlap factor,
+/// chosen to keep spurious products (TBD, at least 60?) dB down.
+/// Passband will be made as wide as possible.
+/// If IFFT size is too small to fit a transition band of the default width,
+/// the whole bandwidth will be made transition band and there will be no
+/// flat part in the frequency response.
+pub fn raised_cosine_weights_default(
+    ifft_size: usize,
+    passband_bins: Option<usize>,
+    transition_bins: Option<usize>,
+    overlap: Overlap,
+) -> Rc<[Sample]> {
+    let (p, t) = match (passband_bins, transition_bins) {
+        (Some(p), Some(t)) => (p, t),
+        (Some(p), None) => (p, (ifft_size - p/2*2) / 2 - 1),
+        (None, t) => {
+            let t = t.unwrap_or(match overlap {
+                Overlap::O1_2 => 15,
+                // Smaller overlap factor needs a wider transition band
+                // for similar level of spurious products.
+                Overlap::O1_4 => 31,
+            }).min(ifft_size/2 - 1);
+            (ifft_size - 2 - 2*t + 1, t)
+        }
+    };
+
+    raised_cosine_weights(ifft_size, p, t)
 }
 
 
@@ -692,7 +743,7 @@ mod tests {
         };
         let output_parameters = AnalysisOutputParameters {
             center_bin: 11,
-            weights: raised_cosine_weights(100, None, None, input_parameters.overlap),
+            weights: raised_cosine_weights_default(100, None, None, input_parameters.overlap),
         };
         let mut an = AnalysisInputProcessor::new(&mut fft_planner, input_parameters);
         let mut an_output = AnalysisOutputProcessor::new(&mut fft_planner, input_parameters, output_parameters);
@@ -734,7 +785,7 @@ mod tests {
         };
 
         let mut sy = SynthesisOutputProcessor::new(&mut fft_planner, output_parameters);
-        let mut sy_input = SynthesisInputProcessor::new_with_frequency(&mut fft_planner, output_parameters, 9600.0, 100.0);
+        let mut sy_input = SynthesisInputProcessor::new_with_frequency(&mut fft_planner, output_parameters, 9600.0, 100.0, None);
 
         let mut input_buffer = sy_input.make_input_buffer();
 
@@ -764,7 +815,7 @@ mod tests {
             passband_bins: Option<usize>,
             transition_bins: Option<usize>,
         ) {
-            let weights = raised_cosine_weights(ifft_size, passband_bins, transition_bins, Overlap::O1_2);
+            let weights = raised_cosine_weights_default(ifft_size, passband_bins, transition_bins, Overlap::O1_2);
             println!("{:?}", weights);
             // Check that "DC" bin is 1.0
             assert!(weights[0] == 1.0);
@@ -772,6 +823,8 @@ mod tests {
             assert!(weights[ifft_size/2] == 0.0);
         }
         test(32, Some(9), Some(4));
+        test(32, Some(9), None);
+        test(32, None, Some(4));
         test(100, None, None);
         test(16, None, None);
     }

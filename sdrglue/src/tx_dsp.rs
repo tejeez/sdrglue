@@ -24,6 +24,8 @@ impl TxChannel {
             synth_params,
             processor.output_sample_rate(),
             processor.output_center_frequency(),
+            // TODO: maybe add processor.output_bandwidth()
+            None,
         );
         let buffer = fcfb_input.make_input_buffer();
         Self {
