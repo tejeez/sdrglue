@@ -49,6 +49,8 @@ fn main() {
     };
 
     let mut error_count = 0;
+    let mut rx_block_count = 0;
+    let mut tx_block_count = 0;
 
     loop {
         let mut rx_time: Option<i64> = None;
@@ -58,7 +60,8 @@ fn main() {
                 Ok(rx_result) => {
                     error_count = 0;
                     rx_time = rx_result.time;
-                    rx_dsp.process();
+                    rx_dsp.process(rx_block_count);
+                    rx_block_count += 1;
                 },
                 Err(err) => {
                     error_count += 1;
@@ -76,7 +79,7 @@ fn main() {
 
         if let Some(tx_dsp) = &mut tx_dsp {
             let tx_time: Option<i64> = if let Some(rx_time) = rx_time { Some(rx_time + cli.rx_tx_delay) } else { None };
-            match sdr.transmit(tx_dsp.process(), tx_time) {
+            match sdr.transmit(tx_dsp.process(tx_block_count), tx_time) {
                 Ok(_) => {},
                 Err(err) => {
                     error_count += 1;
@@ -86,6 +89,7 @@ fn main() {
                     }
                 }
             }
+            tx_block_count += 1;
         }
 
         if rx_dsp.is_none() && tx_dsp.is_none() {

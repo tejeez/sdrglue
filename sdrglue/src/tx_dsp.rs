@@ -2,7 +2,7 @@
 use rustfft;
 use crate::{Sample, ComplexSample};
 use crate::configuration;
-use crate::fcfb;
+use crate::fcfb::{self, BlockCount};
 use crate::txthings;
 
 
@@ -38,9 +38,10 @@ impl TxChannel {
     fn process(
         &mut self,
         synth: &mut fcfb::SynthesisOutputProcessor,
+        block_count: BlockCount,
     ) {
         self.processor.process(self.buffer.prepare_for_new_samples());
-        synth.add(self.synth_input.process(self.buffer.buffer()));
+        synth.add(self.synth_input.process(self.buffer.buffer(), block_count));
     }
 }
 
@@ -81,9 +82,10 @@ impl TxDsp {
 
     pub fn process(
         &mut self,
+        block_count: BlockCount,
     ) -> &[ComplexSample] {
         for processor in self.processors.iter_mut() {
-            processor.process(&mut self.synth_bank);
+            processor.process(&mut self.synth_bank, block_count);
         }
         self.synth_bank.process()
     }

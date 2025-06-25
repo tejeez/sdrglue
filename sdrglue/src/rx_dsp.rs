@@ -121,8 +121,9 @@ impl RxDsp {
 
     pub fn process(
         &mut self,
+        block_count: fcfb::BlockCount,
     ) {
-        let ir = self.analysis_bank.process(self.input_buffer.buffer());
+        let ir = self.analysis_bank.process(self.input_buffer.buffer(), block_count);
         for processor in self.processors.iter_mut() {
             processor.process(ir);
         }
