@@ -1,6 +1,6 @@
 
 use super::RxChannelProcessor;
-use crate::{Sample, ComplexSample, sample_consts};
+use crate::dsp_types::*;
 use crate::filter;
 
 const SAMPLE_RATE: f64 = 48000.0;
@@ -23,7 +23,7 @@ pub struct DemodulateToUdp {
     second_mixer_phase: usize,
     /// Channel filter, used for both FM and SSB
     /// but with different bandwidth.
-    channel_filter: filter::FirCf32Sym,
+    channel_filter: filter::FirComplexSymWithTaps,
     /// Output buffer.
     /// Demodulated signal is written here
     /// in the format that is sent to the UDP socket.
@@ -72,7 +72,7 @@ impl DemodulateToUdp {
             // so memory use could be reduced (which might be good for cache)
             // by computing them once and sharing them among demodulators.
             // This can be done later.
-            channel_filter: filter::FirCf32Sym::new(match parameters.modulation {
+            channel_filter: filter::FirComplexSymWithTaps::new(match parameters.modulation {
                 Modulation::FM =>
                     filter::design_fir_lowpass(SAMPLE_RATE, 8000.0, 32),
                 Modulation::USB | Modulation::LSB =>
@@ -87,7 +87,7 @@ impl RxChannelProcessor for DemodulateToUdp {
     fn process(&mut self, samples: &[ComplexSample]) {
         self.output_buffer.clear();
         for &sample in samples {
-            let full_scale = i16::MAX as Sample;
+            let full_scale = i16::MAX as RealSample;
 
             let filtered = self.channel_filter.sample(sample);
 

@@ -1,6 +1,6 @@
 
 use rustfft;
-use crate::{Sample, ComplexSample};
+use crate::{RealSample, ComplexSample};
 use crate::configuration;
 use crate::fcfb::{self, BlockCount};
 use crate::txthings;
@@ -15,7 +15,7 @@ struct TxChannel {
 
 impl TxChannel {
     fn new(
-        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        fft_planner: &mut rustfft::FftPlanner<RealSample>,
         synth_params: fcfb::SynthesisOutputParameters,
         processor: Box<dyn txthings::TxChannelProcessor>,
     ) -> Self {
@@ -57,7 +57,7 @@ pub struct TxDsp {
 
 impl TxDsp {
     pub fn new(
-        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        fft_planner: &mut rustfft::FftPlanner<RealSample>,
         cli: &configuration::Cli,
         sdr_tx_sample_rate: f64,
         sdr_tx_center_frequency: f64,

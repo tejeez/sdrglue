@@ -1,21 +1,5 @@
 
 pub use clap::Parser;
-use crate::fcfb;
-
-// Ok, parsing to enum with clap seems like too much effort to implement.
-// Let's use a string for now.
-/*struct Error;
-impl std::str::FromStr for fcfb::Overlap {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "1/2" => Ok(fcfb::Overlap::O1_2),
-            "1/4" => Ok(fcfb::Overlap::O1_4),
-            _ => Err(Error),
-        }
-    }
-}*/
-
 
 #[derive(Parser)]
 pub struct Cli {

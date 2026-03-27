@@ -1,15 +1,10 @@
 
 pub use rustfft::num_complex as num_complex;
 pub use rustfft::num_traits as num_traits;
-/// Floating point type used for signal processing.
-pub type Sample = f32;
-/// Complex floating point type used for signal processing.
-pub type ComplexSample = num_complex::Complex<Sample>;
-/// Mathematical consts for the Sample type.
-pub use std::f32::consts as sample_consts;
 
 mod configuration;
 use configuration::Parser;
+mod dsp_types;
 mod fcfb;
 mod filter;
 mod rx_dsp;
@@ -17,6 +12,8 @@ mod tx_dsp;
 mod rxthings;
 mod txthings;
 mod soapyconfig;
+
+use dsp_types::*;
 
 
 fn main() {

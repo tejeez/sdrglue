@@ -1,6 +1,6 @@
 
 use super::RxChannelProcessor;
-use crate::{Sample, ComplexSample, sample_consts};
+use crate::dsp_types::*;
 use std::fs::File;
 use std::io::prelude::*;
 

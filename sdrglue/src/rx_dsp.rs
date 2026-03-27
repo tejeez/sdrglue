@@ -1,6 +1,6 @@
 
 use rustfft;
-use crate::{Sample, ComplexSample};
+use crate::{RealSample, ComplexSample};
 use crate::configuration;
 use crate::fcfb;
 use crate::rxthings;
@@ -13,7 +13,7 @@ struct RxChannel {
 
 impl RxChannel {
     fn new(
-        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        fft_planner: &mut rustfft::FftPlanner<RealSample>,
         analysis_in_params: fcfb::AnalysisInputParameters,
         processor: Box<dyn rxthings::RxChannelProcessor>,
     ) -> Self {
@@ -52,7 +52,7 @@ pub struct RxDsp {
 
 impl RxDsp {
     pub fn new(
-        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        fft_planner: &mut rustfft::FftPlanner<RealSample>,
         cli: &configuration::Cli,
         sdr_rx_sample_rate: f64,
         sdr_rx_center_frequency: f64,
@@ -79,7 +79,7 @@ impl RxDsp {
 
     fn add_processors_from_cli(
         &mut self,
-        fft_planner: &mut rustfft::FftPlanner<Sample>,
+        fft_planner: &mut rustfft::FftPlanner<RealSample>,
         cli: &configuration::Cli
     ) {
         for args in cli.demodulate_to_udp.chunks_exact(3) {
