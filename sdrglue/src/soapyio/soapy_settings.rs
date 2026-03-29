@@ -1,6 +1,6 @@
 //! Device-specific SoapySDR settings
 
-use super::{CfgSoapySdr, StackMode};
+use super::CfgSoapySdr;
 
 /// Enum of all supported devices
 pub enum SupportedDevice {
@@ -66,8 +66,10 @@ pub struct SdrSettings {
     /// current hardware time. This is used in case get_hardware_time
     /// is unacceptably slow or not supported.
     pub use_get_hardware_time: bool,
-    /// Receive and transmit sample rate.
-    pub fs: f64,
+    /// Receive sample rate.
+    pub rx_fs: f64,
+    /// Transmit sample rate.
+    pub tx_fs: f64,
     /// Receive channel number
     pub rx_ch: usize,
     /// Transmit channel number
@@ -96,12 +98,15 @@ pub enum Error {
 
 impl SdrSettings {
     /// Get settings based on SDR type and SoapySDR configuration
-    pub fn get_settings(cfg: &CfgSoapySdr, device: SupportedDevice, mode: StackMode) -> Result<Self, Error> {
-        let mut settings = Self::get_defaults(cfg, device, mode);
+    pub fn get_settings(cfg: &CfgSoapySdr, device: SupportedDevice) -> Result<Self, Error> {
+        let mut settings = Self::get_defaults(cfg, device)?;
 
         // Override settings if specified in configuration
-        if let Some(fs) = cfg.fs {
-            settings.fs = fs;
+        if let Some(fs) = cfg.rx_fs {
+            settings.rx_fs = fs;
+        }
+        if let Some(fs) = cfg.tx_fs {
+            settings.tx_fs = fs;
         }
         if let Some(ch) = cfg.rx_ch {
             settings.rx_ch = ch;
@@ -118,7 +123,7 @@ impl SdrSettings {
 
         let mut cfg_gains = cfg.rx_gains.clone();
         for (name, value) in settings.rx_gain.iter_mut() {
-            if let Some(gain) = cfg_gains.remove(&(*name.to_lowercase())) {
+            if let Some(gain) = cfg_gains.remove(name) {
                 *value = gain;
             }
         }
@@ -129,7 +134,7 @@ impl SdrSettings {
 
         let mut cfg_gains = cfg.tx_gains.clone();
         for (name, value) in settings.tx_gain.iter_mut() {
-            if let Some(gain) = cfg_gains.remove(&(*name.to_lowercase())) {
+            if let Some(gain) = cfg_gains.remove(name) {
                 *value = gain;
             }
         }
@@ -144,16 +149,16 @@ impl SdrSettings {
     }
 
     /// Get default settings based on SDR type
-    fn get_defaults(cfg: &CfgSoapySdr, device: SupportedDevice, mode: StackMode) -> Self {
-        match device {
-            SupportedDevice::LimeSdr(model) => Self::settings_limesdr(mode, model),
+    fn get_defaults(cfg: &CfgSoapySdr, device: SupportedDevice) -> Result<Self, Error> {
+        Ok(match device {
+            SupportedDevice::LimeSdr(model) => Self::settings_limesdr(model),
 
-            SupportedDevice::SXceiver => Self::settings_sxceiver(mode, cfg.fs),
+            SupportedDevice::SXceiver => Self::settings_sxceiver(&cfg)?,
 
-            SupportedDevice::PlutoSdr => Self::settings_pluto(mode),
+            SupportedDevice::PlutoSdr => Self::settings_pluto(),
 
-            SupportedDevice::Usrp(model) => Self::settings_usrp(mode, model),
-        }
+            SupportedDevice::Usrp(model) => Self::settings_usrp(model),
+        })
     }
 
     /// Reasonable defaults for many SDR devices.
@@ -161,24 +166,11 @@ impl SdrSettings {
     /// but are useful as a template for the most common settings.
     /// This reduces changed needed in code in case
     /// more fields are added to SdrSettings to handle some special cases.
-    fn default(mode: StackMode) -> Self {
+    fn default() -> Self {
         Self {
             name: String::new(), // should be always overridden
-
-            // With FCFB bin spacing of 500 Hz and overlap factor or 1/4,
-            // FFT size becomes fs/500 and must be a multiple of 4.
-            // If possible, use a power-of-two value in kHz
-            // because power-of-two FFT sizes are most computationally efficient.
-            fs: match mode {
-                // 512 kHz is enough for BS use,
-                // and some devices struggle with very low sample rates
-                // lower than that, making it a good default choice.
-                StackMode::Bs | StackMode::Ms => 512e3,
-                // Simultaneous UL/DL monitoring at 10 MHz duplex spacing
-                // needs something well above 10 MHz.
-                StackMode::Mon => 16384e3,
-            },
-
+            rx_fs: 512e3,
+            tx_fs: 512e3,
             use_get_hardware_time: true,
             rx_ant: None,
             tx_ant: None,
@@ -192,7 +184,7 @@ impl SdrSettings {
         }
     }
 
-    fn settings_limesdr(mode: StackMode, model: LimeSdrModel) -> Self {
+    fn settings_limesdr(model: LimeSdrModel) -> Self {
         Self {
             name: match model {
                 LimeSdrModel::LimeSdrUsb => "LimeSDR USB",
@@ -222,27 +214,27 @@ impl SdrSettings {
             rx_gain: vec![("LNA".to_string(), 18.0), ("TIA".to_string(), 6.0), ("PGA".to_string(), 10.0)],
             tx_gain: vec![("PAD".to_string(), 22.0), ("IAMP".to_string(), 6.0)],
 
-            // Minimum latency for BS/MS, maximum throughput for monitor
-            rx_args: vec![("latency".to_string(), if mode == StackMode::Mon { "1" } else { "0" }.to_string())],
-            tx_args: vec![("latency".to_string(), if mode == StackMode::Mon { "1" } else { "0" }.to_string())],
+            // TODO: choose latency parameter based on block size
+            rx_args: vec![("latency".to_string(), "0".to_string())],
+            tx_args: vec![("latency".to_string(), "0".to_string())],
 
-            ..Self::default(mode)
+            ..Self::default()
         }
     }
 
-    fn settings_sxceiver(mode: StackMode, fs_override: Option<f64>) -> Self {
+    fn settings_sxceiver(cfg: &CfgSoapySdr) -> Result<Self, Error> {
         // TODO: pass detected clock rate or list of supported sample rates
-        // to get_settings and choose sample rate accordingly.
-        // Ok, it is not strictly needed now that sample rate can be overridden.
-        // That added another minor issue, though:
-        // sample rate affects the optimal period size
-        // and override is applied after it is computed.
-        // OK, duplicate handle sample rate override here
-        // as an ugly little extra special case...
-        let fs = fs_override.unwrap_or(600e3);
-        Self {
+        // to get_settings and choose default sample rate accordingly.
+        // Sample rate affects the optimal period size,
+        // so duplicate sample rate override here.
+        if cfg.rx_fs != cfg.tx_fs {
+            return Err(Error::InvalidConfiguration);
+        }
+        let fs = cfg.rx_fs.unwrap_or(600e3);
+        Ok(Self {
             name: "SXceiver".to_string(),
-            fs,
+            rx_fs: fs,
+            tx_fs: fs,
 
             rx_ant: Some("RX".to_string()),
             tx_ant: Some("TX".to_string()),
@@ -250,14 +242,14 @@ impl SdrSettings {
             rx_gain: vec![("LNA".to_string(), 42.0), ("PGA".to_string(), 16.0)],
             tx_gain: vec![("DAC".to_string(), 9.0), ("MIXER".to_string(), 30.0)],
 
-            rx_args: vec![("period".to_string(), block_size(fs).to_string())],
-            tx_args: vec![("period".to_string(), block_size(fs).to_string())],
+            rx_args: vec![("period".to_string(), (cfg.rx_block_seconds * fs).round().to_string())],
+            tx_args: vec![("period".to_string(), (cfg.tx_block_seconds * fs).round().to_string())],
 
-            ..Self::default(mode)
-        }
+            ..Self::default()
+        })
     }
 
-    fn settings_usrp(mode: StackMode, model: UsrpModel) -> Self {
+    fn settings_usrp(model: UsrpModel) -> Self {
         Self {
             name: match model {
                 UsrpModel::B200 => "USRP B200",
@@ -272,11 +264,11 @@ impl SdrSettings {
             rx_gain: vec![("PGA".to_string(), 50.0)],
             tx_gain: vec![("PGA".to_string(), 35.0)],
 
-            ..Self::default(mode)
+            ..Self::default()
         }
     }
 
-    fn settings_pluto(mode: StackMode) -> Self {
+    fn settings_pluto() -> Self {
         Self {
             name: "Pluto".to_string(),
             // get_hardware_time is apparently not implemented for pluto.
@@ -284,7 +276,8 @@ impl SdrSettings {
 
             // TODO: check if sample rate could be increased to 1024e3.
             // That would allow a power-of-two FFT size for lower CPU use.
-            fs: 1e6,
+            rx_fs: 1e6,
+            tx_fs: 1e6,
 
             rx_ant: Some("A_BALANCED".to_string()),
             tx_ant: Some("A".to_string()),
@@ -298,16 +291,7 @@ impl SdrSettings {
                 ("loopback".to_string(), "0".to_string()),
             ],
 
-            ..Self::default(mode)
+            ..Self::default()
         }
     }
-}
-
-/// Get processing block size in samples for a given sample rate.
-/// This can be used to optimize performance for some SDRs.
-pub fn block_size(fs: f64) -> usize {
-    // With current FCFB parameters processing blocks are 1.5 ms long.
-    // It is a bit bug prone to have it here in case
-    // FCFB parameters are changed, but it makes things simpler for now.
-    (fs * 1.5e-3).round() as usize
 }

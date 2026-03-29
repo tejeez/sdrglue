@@ -2,7 +2,7 @@ use soapysdr;
 
 use crate::dsp_types::*;
 
-use super::{CfgSoapySdr, StackMode, RxTxDevError};
+use super::CfgSoapySdr;
 use super::soapy_settings;
 use super::soapy_settings::{SdrSettings, SupportedDevice};
 use super::soapy_time::{ticks_to_time_ns, time_ns_to_ticks};
@@ -60,9 +60,7 @@ macro_rules! soapycheck {
 
 impl SoapyIo {
     pub fn new(soapy_cfg: &CfgSoapySdr) -> Result<Self, soapysdr::Error> {
-        let mode = StackMode::Bs;
-
-        let (dev, sdr_settings) = open_device(&soapy_cfg, mode)?;
+        let (dev, sdr_settings) = open_device(&soapy_cfg)?;
 
         let rx_ch = sdr_settings.rx_ch;
         let tx_ch = sdr_settings.tx_ch;
@@ -76,7 +74,7 @@ impl SoapyIo {
             // TODO: ppm correction
             soapycheck!(
                 "set RX sample rate",
-                dev.set_sample_rate(soapysdr::Direction::Rx, rx_ch, sdr_settings.fs)
+                dev.set_sample_rate(soapysdr::Direction::Rx, rx_ch, sdr_settings.rx_fs)
             );
             // Read the actual sample rate obtained and store it
             // to avoid having to read it again every time it is needed.
@@ -87,7 +85,7 @@ impl SoapyIo {
             // TODO: ppm correction
             soapycheck!(
                 "set TX sample rate",
-                dev.set_sample_rate(soapysdr::Direction::Tx, tx_ch, sdr_settings.fs)
+                dev.set_sample_rate(soapysdr::Direction::Tx, tx_ch, sdr_settings.tx_fs)
             );
             tx_fs = soapycheck!("get TX sample rate", dev.sample_rate(soapysdr::Direction::Tx, tx_ch));
         }
@@ -175,7 +173,7 @@ impl SoapyIo {
         Ok(())
     }
 
-    pub fn receive(&mut self, buffer: &mut [StreamType]) -> Result<RxResult, RxTxDevError> {
+    pub fn receive(&mut self, buffer: &mut [StreamType]) -> Result<RxResult, soapysdr::Error> {
         if let Some(rx) = &mut self.rx {
             // RX is enabled
             match rx.read(&mut [buffer], 1000000) {
@@ -226,15 +224,17 @@ impl SoapyIo {
 
                     Ok(RxResult { len, count })
                 }
-                Err(_) => Err(RxTxDevError::RxReadError),
+                Err(err) => Err(err),
             }
         } else {
-            // RX is disabled
-            Err(RxTxDevError::RxReadError)
+            Err(soapysdr::Error {
+                code: soapysdr::ErrorCode::NotSupported,
+                message: "RX is disabled".into()
+            })
         }
     }
 
-    pub fn transmit(&mut self, buffer: &[StreamType], count: Option<SampleCount>) -> Result<(), RxTxDevError> {
+    pub fn transmit(&mut self, buffer: &[StreamType], count: Option<SampleCount>) -> Result<(), soapysdr::Error> {
         if let Some(tx) = &mut self.tx {
             if let Some(initial_time) = self.initial_time {
                 tx.write_all(
@@ -243,23 +243,26 @@ impl SoapyIo {
                     false,
                     1000000,
                 )
-                .map_err(|_| RxTxDevError::RxReadError)
             } else {
-                // initial_time is not available, so TX is not possible yet
-                Err(RxTxDevError::RxReadError)
+                Err(soapysdr::Error {
+                    code: soapysdr::ErrorCode::NotSupported,
+                    message: "TX is not possible yet".into()
+                })
             }
         } else {
-            // TX is disabled
-            Err(RxTxDevError::RxReadError)
+            Err(soapysdr::Error {
+                code: soapysdr::ErrorCode::NotSupported,
+                message: "TX is disabled".into()
+            })
         }
     }
 
-    pub fn current_time(&self) -> Result<i64, RxTxDevError> {
-        self.dev.get_hardware_time(None).map_err(|_| RxTxDevError::RxReadError)
+    fn current_time(&self) -> Result<i64, soapysdr::Error> {
+        self.dev.get_hardware_time(None)
     }
 
     /// Current hardware time as RX sample count
-    pub fn rx_current_count(&self) -> Result<SampleCount, RxTxDevError> {
+    pub fn rx_current_count(&self) -> Result<SampleCount, soapysdr::Error> {
         if !self.rx_enabled() {
             return Ok(0);
         }
@@ -271,7 +274,7 @@ impl SoapyIo {
     }
 
     /// Current hardware time as TX sample count
-    pub fn tx_current_count(&self) -> Result<SampleCount, RxTxDevError> {
+    pub fn tx_current_count(&self) -> Result<SampleCount, soapysdr::Error> {
         if !self.tx_enabled() {
             return Ok(0);
         }
@@ -391,14 +394,14 @@ fn find_supported_device(filter_args: soapysdr::Args) -> Result<OpenedDevice, so
 
 /// Open a given device if argument string is given,
 /// automatically find the first supported device if not.
-fn open_device(soapy_cfg: &CfgSoapySdr, mode: StackMode) -> Result<(soapysdr::Device, SdrSettings), soapysdr::Error> {
+fn open_device(soapy_cfg: &CfgSoapySdr) -> Result<(soapysdr::Device, SdrSettings), soapysdr::Error> {
     let mut opened_device = if let Some(arg_string) = &soapy_cfg.device {
         open_given_device(arg_string.as_str().into())
     } else {
         find_supported_device(soapysdr::Args::new())
     }?;
 
-    let mut sdr_settings = match SdrSettings::get_settings(&soapy_cfg, opened_device.detected_device, mode) {
+    let mut sdr_settings = match SdrSettings::get_settings(&soapy_cfg, opened_device.detected_device) {
         Ok(sdr_settings) => sdr_settings,
         Err(soapy_settings::Error::InvalidConfiguration) => {
             return Err(soapysdr::Error {

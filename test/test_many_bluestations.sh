@@ -8,6 +8,7 @@ cargo build --release
 chrt -f 80 target/release/sdrglue \
     --sdr-rx-freq 433.0625e6 \
     --sdr-tx-freq 438.0625e6 \
+    --sdr-tx-gain MIXER 10 \
     --rx-to-dgram /tmp/bluestation1-rx-socket 433.025e6 IQ \
     --rx-to-dgram /tmp/bluestation2-rx-socket 433.050e6 IQ \
     --rx-to-dgram /tmp/bluestation3-rx-socket 433.075e6 IQ \

@@ -1,5 +1,4 @@
 
-use std::collections::HashMap;
 pub use clap::Parser;
 
 use crate::dsp_types::*;
@@ -51,16 +50,14 @@ pub struct Cli {
     #[arg(long)]
     pub sdr_tx_ant: Option<String>,
 
-    /// Receive gain(s) for SDR.
-    /// If only one number if given, it will set the overall gain.
-    /// If multiple values are given, they will set individual gain elements
+    /// Receive gains for SDR
     /// given as pairs of element_name gain_value...
-    /// Default value is provided for some SDR devices.
-    //#[arg(long)]
-    //pub sdr_rx_gain: Vec<String>,
-    /// Transmit gain(s) for SDR.
-    //#[arg(long)]
-    //pub sdr_tx_gain: Vec<String>,
+    /// Default values are provided for some SDR devices.
+    #[arg(long, value_delimiter = ' ', num_args = 2..)]
+    pub sdr_rx_gain: Vec<String>,
+    /// Transmit gains for SDR
+    #[arg(long, value_delimiter = ' ', num_args = 2..)]
+    pub sdr_tx_gain: Vec<String>,
 
     /// SoapySDR receive stream arguments.
     //#[arg(long, value_delimiter = ' ', num_args = 2..)]
@@ -138,15 +135,22 @@ impl Cli {
             device: self.sdr_device.clone(),
             rx_ant: self.sdr_rx_ant.clone(),
             tx_ant: self.sdr_tx_ant.clone(),
-            rx_gains: HashMap::new(), // TODO
-            tx_gains: HashMap::new(), // TODO
-            fs: {
-                // TODO: support different RX and TX sample rates?
-                assert!(self.sdr_rx_fs == self.sdr_tx_fs, "RX and TX sample rates must be equal");
-                self.sdr_rx_fs
-            },
+            rx_gains:
+                self.sdr_rx_gain
+                .chunks_exact(2)
+                .map(|pair| { (pair[0].clone(), pair[1].parse().unwrap()) })
+                .collect(),
+            tx_gains:
+                self.sdr_tx_gain
+                .chunks_exact(2)
+                .map(|pair| { (pair[0].clone(), pair[1].parse().unwrap()) })
+                .collect(),
+            rx_fs: self.sdr_rx_fs,
+            tx_fs: self.sdr_tx_fs,
             rx_ch: self.sdr_rx_ch,
             tx_ch: self.sdr_tx_ch,
+            rx_block_seconds: if self.rx_overlap == "1/4" { 0.75 } else { 0.5 } / self.rx_bin_spacing,
+            tx_block_seconds: if self.tx_overlap == "1/4" { 0.75 } else { 0.5 } / self.tx_bin_spacing,
         }
     }
 

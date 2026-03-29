@@ -4,21 +4,6 @@ pub mod io;
 mod soapy_settings;
 mod soapy_time;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum RxTxDevError {
-    RxEndOfData,
-    RxReadError,
-}
-
-// TODO: get rid of this.
-// Keeping it here now to reduce changes in code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StackMode {
-    Bs,
-    Ms,
-    Mon,
-}
-
 /// SoapySDR configuration
 #[derive(Debug, Clone)]
 pub struct CfgSoapySdr {
@@ -41,10 +26,18 @@ pub struct CfgSoapySdr {
     /// TX gain values.
     /// Device specific defaults will be used for gains that are not set.
     pub tx_gains: HashMap<String, f64>,
-    /// RX and TX sample rate. Device specific default will be used if None.
-    pub fs: Option<f64>,
+    /// RX sample rate. Device specific default will be used if None.
+    pub rx_fs: Option<f64>,
+    /// TX sample rate. For many devices this needs to be equal to rx_fs.
+    pub tx_fs: Option<f64>,
     /// RX channel number
     pub rx_ch: Option<usize>,
     /// TX channel number
     pub tx_ch: Option<usize>,
+    /// Expected RX block length in seconds.
+    /// This can be used to optimize performance for some SDRs.
+    pub rx_block_seconds: f64,
+    /// Expected TX block length in seconds.
+    /// This can be used to optimize performance for some SDRs.
+    pub tx_block_seconds: f64,
 }
