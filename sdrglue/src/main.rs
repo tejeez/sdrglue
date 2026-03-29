@@ -8,24 +8,26 @@ mod rx_dsp;
 mod tx_dsp;
 mod rxthings;
 mod txthings;
-mod soapyconfig;
+mod soapyio;
 mod test_timing;
 
 use dsp_types::*;
 
 
 fn main() {
+    tracing_subscriber::fmt().init();
+
     let cli = configuration::Cli::parse();
 
     let mut fft_planner = rustfft::FftPlanner::new();
 
-    let mut sdr = soapyconfig::SoapyIo::init(&cli).unwrap();
+    let mut sdr = soapyio::io::SoapyIo::new(&cli.sdr_parameters()).unwrap();
 
     let mut rx_dsp = if sdr.rx_enabled() {
         let mut rx_dsp = rx_dsp::RxDsp::new(
             &mut fft_planner,
             &cli.rx_dsp_parameters(
-                sdr.rx_sample_rate().unwrap(),
+                sdr.rx_sample_rate(),
                 sdr.rx_center_frequency().unwrap(),
             ),
         );
@@ -39,7 +41,7 @@ fn main() {
         let mut tx_dsp = tx_dsp::TxDsp::new(
             &mut fft_planner,
             &cli.tx_dsp_parameters(
-                sdr.tx_sample_rate().unwrap(),
+                sdr.tx_sample_rate(),
                 sdr.tx_center_frequency().unwrap(),
             ),
         );
@@ -51,22 +53,25 @@ fn main() {
 
     let mut error_count = 0;
     let mut rx_block_count = 0;
-    let mut tx_block_count = 0;
 
     loop {
-        let mut rx_time: Option<i64> = None;
+        let mut rx_sample_count: SampleCount = 0;
 
         if let Some(rx_dsp) = &mut rx_dsp {
-            match sdr.receive(rx_dsp.prepare_input_buffer()) {
+            let input_buffer = rx_dsp.prepare_input_buffer();
+            match sdr.receive(input_buffer) {
                 Ok(rx_result) => {
                     error_count = 0;
-                    rx_time = rx_result.time;
+                    assert!(rx_result.len == input_buffer.len(), "Short RX reads are not handled yet");
+                    rx_sample_count = rx_result.count;
                     rx_dsp.process(rx_block_count);
+                    // TODO: handle lost samples.
+                    // Now assuming RX signal is contiguous.
                     rx_block_count += 1;
                 },
-                Err(err) => {
+                Err(_) => {
                     error_count += 1;
-                    eprintln!("Error receiving from SDR ({}): {}", error_count, err);
+                    tracing::error!("Error receiving from SDR ({})", error_count);
                     // Occasional errors might sometimes occur with some SDRs
                     // even if they would still continue working.
                     // If too many reads result in an error with no valid reads
@@ -79,22 +84,22 @@ fn main() {
         }
 
         if let Some(tx_dsp) = &mut tx_dsp {
-            let tx_time: Option<i64> = if let Some(rx_time) = rx_time { Some(rx_time + cli.rx_tx_delay) } else { None };
-            match sdr.transmit(tx_dsp.process(tx_block_count), tx_time) {
+            let tx_block_count = rx_block_count.wrapping_add(cli.rx_tx_delay_blocks);
+            let tx_sample_count = rx_sample_count.wrapping_add(cli.rx_tx_delay_blocks * tx_dsp.output_block_size() as SampleCount);
+            match sdr.transmit(tx_dsp.process(tx_block_count), Some(tx_sample_count)) {
                 Ok(_) => {},
-                Err(err) => {
+                Err(_) => {
                     error_count += 1;
-                    eprintln!("Error transmitting to SDR ({}): {}", error_count, err);
+                    tracing::error!("Error transmitting to SDR ({})", error_count);
                     if error_count >= 10 {
                         break
                     }
                 }
             }
-            tx_block_count += 1;
         }
 
         if rx_dsp.is_none() && tx_dsp.is_none() {
-            eprintln!("RX and TX are both disabled. Nothing to do.");
+            tracing::error!("RX and TX are both disabled. Nothing to do.");
             break;
         }
     }

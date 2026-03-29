@@ -102,4 +102,8 @@ impl TxDsp {
         }
         self.synth_bank.process()
     }
+
+    pub fn output_block_size(&self) -> usize {
+        self.synth_bank.output_block_size()
+    }
 }

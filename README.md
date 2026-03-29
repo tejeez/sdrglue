@@ -76,7 +76,7 @@ Start Sdrglue with something like:
 
 ```
 target/release/sdrglue \
-    --sdr-device driver rtlsdr \
+    --sdr-device driver=rtlsdr \
     --sdr-rx-freq 88e6 \
     --demodulate-to-udp \
         127.0.0.1:10000 87.9e6 FM \

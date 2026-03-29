@@ -1,4 +1,5 @@
 
+use std::collections::HashMap;
 pub use clap::Parser;
 
 use crate::dsp_types::*;
@@ -7,14 +8,14 @@ use super::tx_dsp;
 use super::rxthings;
 use super::txthings;
 use super::fcfb;
+use super::soapyio;
 
 #[derive(Parser, Default)]
 pub struct Cli {
     /// SoapySDR device arguments
-    /// as pairs like argument_name argument_value...
-    /// For example: --sdr-device driver lime
-    #[arg(long, value_delimiter = ' ', num_args = 2..)]
-    pub sdr_device: Vec<String>,
+    /// For example: driver=lime
+    #[arg(long)]
+    pub sdr_device: Option<String>,
 
     /// Receive center frequency for SDR.
     /// Receiving is disabled if not given.
@@ -35,11 +36,11 @@ pub struct Cli {
     pub sdr_tx_fs: Option<f64>,
 
     /// Receive channel number for SDR.
-    #[arg(long, default_value_t = 0)]
-    pub sdr_rx_ch: usize,
+    #[arg(long)]
+    pub sdr_rx_ch: Option<usize>,
     /// Transmit channel number for SDR.
-    #[arg(long, default_value_t = 0)]
-    pub sdr_tx_ch: usize,
+    #[arg(long)]
+    pub sdr_tx_ch: Option<usize>,
 
     /// Receive antenna for SDR.
     /// Default value is provided for some SDR devices.
@@ -55,26 +56,26 @@ pub struct Cli {
     /// If multiple values are given, they will set individual gain elements
     /// given as pairs of element_name gain_value...
     /// Default value is provided for some SDR devices.
-    #[arg(long)]
-    pub sdr_rx_gain: Vec<String>,
+    //#[arg(long)]
+    //pub sdr_rx_gain: Vec<String>,
     /// Transmit gain(s) for SDR.
-    #[arg(long)]
-    pub sdr_tx_gain: Vec<String>,
+    //#[arg(long)]
+    //pub sdr_tx_gain: Vec<String>,
 
     /// SoapySDR receive stream arguments.
-    #[arg(long, value_delimiter = ' ', num_args = 2..)]
-    pub rx_args: Vec<String>,
+    //#[arg(long, value_delimiter = ' ', num_args = 2..)]
+    //pub rx_args: Vec<String>,
     /// SoapySDR transmit stream arguments.
-    #[arg(long, value_delimiter = ' ', num_args = 2..)]
-    pub tx_args: Vec<String>,
+    //#[arg(long, value_delimiter = ' ', num_args = 2..)]
+    //pub tx_args: Vec<String>,
 
     /// If SDR supports timestamps, we can use the latest RX timestamp
     /// to determine the next TX timestamp. This maintains a consistent
     /// delay from RX to TX and lets us adjust transmit latency.
-    /// This is the timestamp difference in nanoseconds and roughly
-    /// determines how much signal will be kept in transmit buffer.
-    #[arg(long, default_value_t = 20000000)]
-    pub rx_tx_delay: i64,
+    /// This is currently given as a multiple of FCFB block size
+    /// but that might change once different block sizes for RX and TX are supported.
+    #[arg(long, default_value_t = 4)]
+    pub rx_tx_delay_blocks: i64,
 
     /// Spacing of FFT bins (in Hertz) for fast-convolution
     /// analysis filter bank used for received signals.
@@ -123,6 +124,26 @@ pub struct Cli {
 }
 
 impl Cli {
+    pub fn sdr_parameters(&self) -> soapyio::CfgSoapySdr {
+        soapyio::CfgSoapySdr {
+            rx_freq: self.sdr_rx_freq,
+            tx_freq: self.sdr_tx_freq,
+            ppm_err: 0.0, // TODO
+            device: self.sdr_device.clone(),
+            rx_ant: self.sdr_rx_ant.clone(),
+            tx_ant: self.sdr_tx_ant.clone(),
+            rx_gains: HashMap::new(), // TODO
+            tx_gains: HashMap::new(), // TODO
+            fs: {
+                // TODO: support different RX and TX sample rates?
+                assert!(self.sdr_rx_fs == self.sdr_tx_fs, "RX and TX sample rates must be equal");
+                self.sdr_rx_fs
+            },
+            rx_ch: self.sdr_rx_ch,
+            tx_ch: self.sdr_tx_ch,
+        }
+    }
+
     pub fn rx_dsp_parameters(
         &self,
         sdr_rx_sample_rate: f64,

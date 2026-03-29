@@ -7,7 +7,7 @@ mkdir -p test_results
 
 taskset -c 1 \
 target/release/sdrglue \
-    --sdr-device driver lime \
+    --sdr-device "driver=lime" \
     --sdr-rx-freq 434e6 \
     --sdr-rx-fs 512e3 \
     --sdr-rx-ant LB2 \
