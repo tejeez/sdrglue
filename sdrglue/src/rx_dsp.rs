@@ -43,8 +43,6 @@ pub struct RxDsp {
     analysis_params: fcfb::AnalysisInputParameters,
     /// Analysis filter bank for received signal.
     analysis_bank: fcfb::AnalysisInputProcessor,
-    /// Input buffer for signal from SDR to filter bank.
-    input_buffer: fcfb::InputBuffer,
     /// Receive channel processors.
     processors: Vec<RxChannel>,
 }
@@ -71,12 +69,9 @@ impl RxDsp {
             center_frequency: params.center_frequency,
             overlap: params.overlap,
         };
-        let analysis_bank = fcfb::AnalysisInputProcessor::new(fft_planner, analysis_params);
-        let input_buffer = analysis_bank.make_input_buffer();
         Self {
             analysis_params,
-            analysis_bank,
-            input_buffer,
+            analysis_bank: fcfb::AnalysisInputProcessor::new(fft_planner, analysis_params),
             processors: Vec::new(),
         }
     }
@@ -89,17 +84,16 @@ impl RxDsp {
         self.processors.push(RxChannel::new(fft_planner, self.analysis_params, processor));
     }
 
-    pub fn prepare_input_buffer(
-        &mut self,
-    ) -> &mut [ComplexSample] {
-        self.input_buffer.prepare_for_new_samples()
+    pub fn input_block_size(&self) -> fcfb::InputBlockSize {
+        self.analysis_bank.input_block_size()
     }
 
     pub fn process(
         &mut self,
+        buffer: &[ComplexSample],
         block_count: fcfb::BlockCount,
     ) {
-        let ir = self.analysis_bank.process(self.input_buffer.buffer(), block_count);
+        let ir = self.analysis_bank.process(&buffer, block_count);
         for processor in self.processors.iter_mut() {
             processor.process(ir);
         }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+pub mod block_io;
 pub mod io;
 mod soapy_settings;
 mod soapy_time;

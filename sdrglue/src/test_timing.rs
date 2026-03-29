@@ -38,10 +38,10 @@ fn test_dsp_timing() {
             interval: 1000,
         })));
 
-    //tx_dsp.
+    let mut fcfb_buffer = fcfb::InputBuffer::new(rx_dsp.input_block_size());
     for block_count in 0i64..100i64 {
-        let buffer = rx_dsp.prepare_input_buffer();
-        buffer.copy_from_slice(tx_dsp.process(block_count));
-        rx_dsp.process(block_count);
+        let block_samples = fcfb_buffer.prepare_for_new_samples();
+        block_samples.copy_from_slice(tx_dsp.process(block_count));
+        rx_dsp.process(fcfb_buffer.buffer(), block_count);
     }
 }

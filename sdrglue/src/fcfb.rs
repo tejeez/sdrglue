@@ -175,6 +175,7 @@ impl AnalysisInputProcessor {
         input_block_size(self.parameters.fft_size, self.parameters.overlap)
     }
 
+    #[allow(dead_code)]
     pub fn make_input_buffer(&self) -> InputBuffer {
         InputBuffer::new(self.input_block_size())
     }
