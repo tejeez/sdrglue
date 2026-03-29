@@ -1,7 +1,7 @@
 //! Receive channel processors.
 
 pub mod demodulator;
-
+pub mod dgram;
 pub mod iqrecorder;
 
 use crate::dsp_types::*;

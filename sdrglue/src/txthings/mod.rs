@@ -1,5 +1,6 @@
 //! Transmit channel processors.
 
+pub mod dgram;
 pub mod testpulse;
 
 use crate::dsp_types::*;

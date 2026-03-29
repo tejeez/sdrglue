@@ -53,6 +53,7 @@ fn main() {
 
     let mut error_count = 0;
     let mut rx_block_count = 0;
+    let mut minimum_timing_margin: SampleCount = SampleCount::MAX;
 
     loop {
         let mut rx_sample_count: SampleCount = 0;
@@ -87,7 +88,16 @@ fn main() {
             let tx_block_count = rx_block_count.wrapping_add(cli.rx_tx_delay_blocks);
             let tx_sample_count = rx_sample_count.wrapping_add(cli.rx_tx_delay_blocks * tx_dsp.output_block_size() as SampleCount);
             match sdr.transmit(tx_dsp.process(tx_block_count), Some(tx_sample_count)) {
-                Ok(_) => {},
+                Ok(_) => {
+                    let current_count = sdr.tx_current_count().unwrap();
+                    let timing_margin = tx_sample_count.wrapping_sub(current_count);
+                    minimum_timing_margin = minimum_timing_margin.min(timing_margin);
+                    if tx_block_count.rem_euclid(1024) == 0 {
+                        let minimum_timing_margin_ms = 1000.0 * minimum_timing_margin as f64 / sdr.tx_sample_rate();
+                        tracing::info!("Estimated margin for TX deadline: {:.2} ms", minimum_timing_margin_ms);
+                        minimum_timing_margin = timing_margin;
+                    }
+                },
                 Err(_) => {
                     error_count += 1;
                     tracing::error!("Error transmitting to SDR ({})", error_count);

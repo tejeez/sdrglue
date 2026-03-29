@@ -74,7 +74,7 @@ pub struct Cli {
     /// delay from RX to TX and lets us adjust transmit latency.
     /// This is currently given as a multiple of FCFB block size
     /// but that might change once different block sizes for RX and TX are supported.
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 8)]
     pub rx_tx_delay_blocks: i64,
 
     /// Spacing of FFT bins (in Hertz) for fast-convolution
@@ -116,11 +116,17 @@ pub struct Cli {
     #[arg(long, value_delimiter = ' ', num_args = 3..)]
     pub record_iq: Vec<String>,
 
+    #[arg(long, value_delimiter = ' ', num_args = 3..)]
+    pub rx_to_dgram: Vec<String>,
+
     /// Add test pulse transmitters.
     /// Each transmitter takes 3 arguments:
     /// Sample rate, center frequency and pulse interval (in samples).
     #[arg(long, value_delimiter = ' ', num_args = 3..)]
     pub tx_test_pulse: Vec<String>,
+
+    #[arg(long, value_delimiter = ' ', num_args = 3..)]
+    pub tx_from_dgram: Vec<String>,
 }
 
 impl Cli {
@@ -175,6 +181,21 @@ impl Cli {
         fft_planner: &mut FftPlanner,
         rx_dsp: &mut rx_dsp::RxDsp
     ) {
+        for args in self.rx_to_dgram.chunks_exact(3) {
+            rx_dsp.add_processor(fft_planner, Box::new(
+                rxthings::dgram::RxToDgram::new(&rxthings::dgram::RxToDgramParameters {
+                    path: args[0].as_str(),
+                    center_frequency: args[1].parse().unwrap(),
+                    mode: match args[2].to_uppercase().as_str() {
+                        "IQ"  => rxthings::dgram::Mode::IQ,
+                        "FM"  => rxthings::dgram::Mode::FM,
+                        // TODO: handle errors more nicely
+                        _ => panic!("Unknown mode {}", args[2]),
+                    },
+                }),
+            ));
+        }
+
         for args in self.demodulate_to_udp.chunks_exact(3) {
             rx_dsp.add_processor(fft_planner, Box::new(
                 rxthings::demodulator::DemodulateToUdp::new(&rxthings::demodulator::DemodulateToUdpParameters {
@@ -213,6 +234,21 @@ impl Cli {
                     sample_rate: args[0].parse().unwrap(),
                     center_frequency: args[1].parse().unwrap(),
                     interval: args[2].parse().unwrap(),
+                }),
+            ));
+        }
+
+        for args in self.tx_from_dgram.chunks_exact(3) {
+            tx_dsp.add_processor(fft_planner, Box::new(
+                txthings::dgram::TxFromDgram::new(&txthings::dgram::TxFromDgramParameters {
+                    path: args[0].as_str(),
+                    center_frequency: args[1].parse().unwrap(),
+                    mode: match args[2].to_uppercase().as_str() {
+                        "IQ"  => txthings::dgram::Mode::IQ,
+                        "FM"  => txthings::dgram::Mode::FM,
+                        // TODO: handle errors more nicely
+                        _ => panic!("Unknown mode {}", args[2]),
+                    },
                 }),
             ));
         }
