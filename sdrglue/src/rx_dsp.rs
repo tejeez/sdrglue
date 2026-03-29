@@ -1,7 +1,5 @@
 
-use rustfft;
-use crate::{RealSample, ComplexSample};
-use crate::configuration;
+use crate::dsp_types::*;
 use crate::fcfb;
 use crate::rxthings;
 
@@ -13,7 +11,7 @@ struct RxChannel {
 
 impl RxChannel {
     fn new(
-        fft_planner: &mut rustfft::FftPlanner<RealSample>,
+        fft_planner: &mut FftPlanner,
         analysis_in_params: fcfb::AnalysisInputParameters,
         processor: Box<dyn rxthings::RxChannelProcessor>,
     ) -> Self {
@@ -51,71 +49,44 @@ pub struct RxDsp {
     processors: Vec<RxChannel>,
 }
 
+pub struct RxDspParameters {
+    /// Input sample rate (Hz)
+    pub sample_rate: f64,
+    /// Input sample rate (Hz)
+    pub center_frequency: f64,
+    /// FCFB bin spacing (Hz)
+    pub bin_spacing: f64,
+    /// FCFB overlap factor
+    pub overlap: fcfb::Overlap,
+}
+
 impl RxDsp {
     pub fn new(
-        fft_planner: &mut rustfft::FftPlanner<RealSample>,
-        cli: &configuration::Cli,
-        sdr_rx_sample_rate: f64,
-        sdr_rx_center_frequency: f64,
+        fft_planner: &mut FftPlanner,
+        params: &RxDspParameters,
     ) -> Self {
-        let bin_spacing = cli.rx_bin_spacing;
-
         let analysis_params = fcfb::AnalysisInputParameters {
-            fft_size: (sdr_rx_sample_rate / bin_spacing).round() as usize,
-            sample_rate: sdr_rx_sample_rate,
-            center_frequency: sdr_rx_center_frequency,
-            overlap: if cli.rx_overlap == "1/4" { fcfb::Overlap::O1_4 } else { fcfb::Overlap::O1_2 },
+            fft_size: (params.sample_rate / params.bin_spacing).round() as usize,
+            sample_rate: params.sample_rate,
+            center_frequency: params.center_frequency,
+            overlap: params.overlap,
         };
         let analysis_bank = fcfb::AnalysisInputProcessor::new(fft_planner, analysis_params);
         let input_buffer = analysis_bank.make_input_buffer();
-        let mut self_ = Self {
+        Self {
             analysis_params,
             analysis_bank,
             input_buffer,
             processors: Vec::new(),
-        };
-        self_.add_processors_from_cli(fft_planner, cli);
-        self_
+        }
     }
 
     pub fn add_processor(
         &mut self,
-        fft_planner: &mut rustfft::FftPlanner<RealSample>,
+        fft_planner: &mut FftPlanner,
         processor: Box<dyn rxthings::RxChannelProcessor>,
     ) {
         self.processors.push(RxChannel::new(fft_planner, self.analysis_params, processor));
-    }
-
-    fn add_processors_from_cli(
-        &mut self,
-        fft_planner: &mut rustfft::FftPlanner<RealSample>,
-        cli: &configuration::Cli
-    ) {
-        for args in cli.demodulate_to_udp.chunks_exact(3) {
-            self.add_processor(fft_planner, Box::new(
-                rxthings::demodulator::DemodulateToUdp::new(&rxthings::demodulator::DemodulateToUdpParameters {
-                    center_frequency: args[1].parse().unwrap(),
-                    address: args[0].as_str(),
-                    modulation: match args[2].to_uppercase().as_str() {
-                        "FM"  => rxthings::demodulator::Modulation::FM,
-                        "USB" => rxthings::demodulator::Modulation::USB,
-                        "LSB" => rxthings::demodulator::Modulation::LSB,
-                        // TODO: handle errors more nicely
-                        _ => panic!("Unknown modulation {}", args[2]),
-                    },
-                }),
-            ));
-        }
-
-        for args in cli.record_iq.chunks_exact(3) {
-            self.add_processor(fft_planner, Box::new(
-                rxthings::iqrecorder::RecordIq::new(&rxthings::iqrecorder::RecordIqParameters {
-                    sample_rate: args[1].parse().unwrap(),
-                    center_frequency: args[2].parse().unwrap(),
-                    filename: args[0].as_str(),
-                }),
-            ));
-        }
     }
 
     pub fn prepare_input_buffer(

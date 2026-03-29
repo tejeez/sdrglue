@@ -1,7 +1,6 @@
 
 use rustfft;
-use crate::{RealSample, ComplexSample};
-use crate::configuration;
+use crate::dsp_types::*;
 use crate::fcfb;
 use crate::txthings;
 
@@ -55,29 +54,35 @@ pub struct TxDsp {
     processors: Vec<TxChannel>,
 }
 
+pub struct TxDspParameters {
+    /// Output sample rate (Hz)
+    pub sample_rate: f64,
+    /// Output sample rate (Hz)
+    pub center_frequency: f64,
+    /// FCFB bin spacing (Hz)
+    pub bin_spacing: f64,
+    /// FCFB overlap factor
+    pub overlap: fcfb::Overlap,
+}
+
 impl TxDsp {
     pub fn new(
-        fft_planner: &mut rustfft::FftPlanner<RealSample>,
-        cli: &configuration::Cli,
-        sdr_tx_sample_rate: f64,
-        sdr_tx_center_frequency: f64,
+        fft_planner: &mut FftPlanner,
+        params: &TxDspParameters,
     ) -> Self {
-        let bin_spacing = cli.tx_bin_spacing;
-
         let synth_params = fcfb::SynthesisOutputParameters {
-            ifft_size: (sdr_tx_sample_rate / bin_spacing).round() as usize,
-            sample_rate: sdr_tx_sample_rate,
-            center_frequency: sdr_tx_center_frequency,
-            overlap: if cli.tx_overlap == "1/4" { fcfb::Overlap::O1_4 } else { fcfb::Overlap::O1_2 },
+            ifft_size: (params.sample_rate / params.bin_spacing).round() as usize,
+            sample_rate: params.sample_rate,
+            center_frequency: params.center_frequency,
+            overlap: params.overlap,
         };
         let synth_bank = fcfb::SynthesisOutputProcessor::new(fft_planner, synth_params);
 
-        let mut self_ = Self {
+        Self {
             synth_params,
             synth_bank,
             processors: Vec::new(),
-        };
-        self_
+        }
     }
 
     pub fn add_processor(

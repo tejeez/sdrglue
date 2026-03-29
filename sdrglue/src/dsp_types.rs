@@ -7,4 +7,6 @@ pub use std::f32::consts as sample_consts;
 
 pub type ComplexSample = num_complex::Complex<RealSample>;
 
+pub type FftPlanner = rustfft::FftPlanner<RealSample>;
+
 pub type SampleCount = i64;

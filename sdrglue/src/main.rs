@@ -22,23 +22,29 @@ fn main() {
     let mut sdr = soapyconfig::SoapyIo::init(&cli).unwrap();
 
     let mut rx_dsp = if sdr.rx_enabled() {
-        Some(rx_dsp::RxDsp::new(
+        let mut rx_dsp = rx_dsp::RxDsp::new(
             &mut fft_planner,
-            &cli,
-            sdr.rx_sample_rate().unwrap(),
-            sdr.rx_center_frequency().unwrap()
-        ))
+            &cli.rx_dsp_parameters(
+                sdr.rx_sample_rate().unwrap(),
+                sdr.rx_center_frequency().unwrap(),
+            ),
+        );
+        cli.add_rx_processors(&mut fft_planner, &mut rx_dsp);
+        Some(rx_dsp)
     } else {
         None
     };
 
     let mut tx_dsp = if sdr.tx_enabled() {
-        Some(tx_dsp::TxDsp::new(
+        let mut tx_dsp = tx_dsp::TxDsp::new(
             &mut fft_planner,
-            &cli,
-            sdr.tx_sample_rate().unwrap(),
-            sdr.tx_center_frequency().unwrap()
-        ))
+            &cli.tx_dsp_parameters(
+                sdr.tx_sample_rate().unwrap(),
+                sdr.tx_center_frequency().unwrap(),
+            ),
+        );
+        cli.add_tx_processors(&mut fft_planner, &mut tx_dsp);
+        Some(tx_dsp)
     } else {
         None
     };

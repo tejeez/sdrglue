@@ -1,6 +1,13 @@
 
 pub use clap::Parser;
 
+use crate::dsp_types::*;
+use super::rx_dsp;
+use super::tx_dsp;
+use super::rxthings;
+use super::txthings;
+use super::fcfb;
+
 #[derive(Parser, Default)]
 pub struct Cli {
     /// SoapySDR device arguments
@@ -107,4 +114,86 @@ pub struct Cli {
     /// File name, sample rate and center frequency.
     #[arg(long, value_delimiter = ' ', num_args = 3..)]
     pub record_iq: Vec<String>,
+
+    /// Add test pulse transmitters.
+    /// Each transmitter takes 3 arguments:
+    /// Sample rate, center frequency and pulse interval (in samples).
+    #[arg(long, value_delimiter = ' ', num_args = 3..)]
+    pub tx_test_pulse: Vec<String>,
+}
+
+impl Cli {
+    pub fn rx_dsp_parameters(
+        &self,
+        sdr_rx_sample_rate: f64,
+        sdr_rx_center_frequency: f64,
+    ) -> rx_dsp::RxDspParameters {
+        rx_dsp::RxDspParameters {
+            sample_rate: sdr_rx_sample_rate,
+            center_frequency: sdr_rx_center_frequency,
+            bin_spacing: self.rx_bin_spacing,
+            overlap: if self.rx_overlap == "1/4" { fcfb::Overlap::O1_4 } else { fcfb::Overlap::O1_2 },
+        }
+    }
+
+    pub fn tx_dsp_parameters(
+        &self,
+        sdr_tx_sample_rate: f64,
+        sdr_tx_center_frequency: f64,
+    ) -> tx_dsp::TxDspParameters {
+        tx_dsp::TxDspParameters {
+            sample_rate: sdr_tx_sample_rate,
+            center_frequency: sdr_tx_center_frequency,
+            bin_spacing: self.tx_bin_spacing,
+            overlap: if self.tx_overlap == "1/4" { fcfb::Overlap::O1_4 } else { fcfb::Overlap::O1_2 },
+        }
+    }
+
+    pub fn add_rx_processors(
+        &self,
+        fft_planner: &mut FftPlanner,
+        rx_dsp: &mut rx_dsp::RxDsp
+    ) {
+        for args in self.demodulate_to_udp.chunks_exact(3) {
+            rx_dsp.add_processor(fft_planner, Box::new(
+                rxthings::demodulator::DemodulateToUdp::new(&rxthings::demodulator::DemodulateToUdpParameters {
+                    center_frequency: args[1].parse().unwrap(),
+                    address: args[0].as_str(),
+                    modulation: match args[2].to_uppercase().as_str() {
+                        "FM"  => rxthings::demodulator::Modulation::FM,
+                        "USB" => rxthings::demodulator::Modulation::USB,
+                        "LSB" => rxthings::demodulator::Modulation::LSB,
+                        // TODO: handle errors more nicely
+                        _ => panic!("Unknown modulation {}", args[2]),
+                    },
+                }),
+            ));
+        }
+
+        for args in self.record_iq.chunks_exact(3) {
+            rx_dsp.add_processor(fft_planner, Box::new(
+                rxthings::iqrecorder::RecordIq::new(&rxthings::iqrecorder::RecordIqParameters {
+                    sample_rate: args[1].parse().unwrap(),
+                    center_frequency: args[2].parse().unwrap(),
+                    filename: args[0].as_str(),
+                }),
+            ));
+        }
+    }
+
+    pub fn add_tx_processors(
+        &self,
+        fft_planner: &mut FftPlanner,
+        tx_dsp: &mut tx_dsp::TxDsp
+    ) {
+        for args in self.tx_test_pulse.chunks_exact(3) {
+            tx_dsp.add_processor(fft_planner, Box::new(
+                txthings::testpulse::TestPulse::new(&txthings::testpulse::TestPulseParameters {
+                    sample_rate: args[0].parse().unwrap(),
+                    center_frequency: args[1].parse().unwrap(),
+                    interval: args[2].parse().unwrap(),
+                }),
+            ));
+        }
+    }
 }
