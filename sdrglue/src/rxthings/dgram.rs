@@ -45,7 +45,16 @@ impl RxToDgram {
             output_buffer: Vec::<u8>::with_capacity(PACKET_MAX_BYTES),
             socket: {
                 let socket = UnixDatagram::unbound().unwrap();
-                socket.connect(parameters.path).unwrap();
+                // Re-try connecting until the client has started and the socket exists
+                loop {
+                    match socket.connect(parameters.path) {
+                        Ok(()) => break,
+                        Err(err) => {
+                            tracing::debug!("Could not open output socket yet: {}", err);
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                    }
+                }
                 socket.set_nonblocking(true).unwrap();
                 socket
             }

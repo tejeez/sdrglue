@@ -8,7 +8,6 @@ use super::soapy_settings::{SdrSettings, SupportedDevice};
 use super::soapy_time::{ticks_to_time_ns, time_ns_to_ticks};
 
 type StreamType = ComplexSample;
-const SOAPY_FREQ_OFFSET: f64 = 20000.0;
 
 pub struct RxResult {
     /// Number of samples read
@@ -24,7 +23,7 @@ pub struct SoapyIo {
     tx_fs: f64,
     /// Timestamp for the first sample read from SDR.
     /// This is subtracted from all following timestamps,
-    /// so that sample counter startsB210 from 0 even if timestamp does not.
+    /// so that sample counter starts from 0 even if timestamp does not.
     initial_time: Option<i64>,
     rx_next_count: SampleCount,
     prev_time_ns: i64,
@@ -141,22 +140,16 @@ impl SoapyIo {
             tx_args.set(key, value);
         }
 
-        let mut rx = if rx_enabled {
+        let rx = if rx_enabled {
             Some(soapycheck!("setup RX stream", dev.rx_stream_args(&[rx_ch], rx_args)))
         } else {
             None
         };
-        let mut tx = if tx_enabled {
+        let tx = if tx_enabled {
             Some(soapycheck!("setup TX stream", dev.tx_stream_args(&[tx_ch], tx_args)))
         } else {
             None
         };
-        if let Some(rx) = &mut rx {
-            soapycheck!("activate RX stream", rx.activate(None));
-        }
-        if let Some(tx) = &mut tx {
-            soapycheck!("activate TX stream", tx.activate(None));
-        }
         Ok(Self {
             rx_ch,
             tx_ch,
@@ -170,6 +163,16 @@ impl SoapyIo {
             rx,
             tx,
         })
+    }
+
+    pub fn activate(&mut self) -> Result<(), soapysdr::Error> {
+        if let Some(rx) = &mut self.rx {
+            soapycheck!("activate RX stream", rx.activate(None));
+        }
+        if let Some(tx) = &mut self.tx {
+            soapycheck!("activate TX stream", tx.activate(None));
+        }
+        Ok(())
     }
 
     pub fn receive(&mut self, buffer: &mut [StreamType]) -> Result<RxResult, RxTxDevError> {

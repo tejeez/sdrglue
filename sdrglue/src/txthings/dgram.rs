@@ -65,6 +65,9 @@ impl TxFromDgram {
             input_buffer: vec![0; PACKET_MAX_BYTES],
             packet_info: None,
             socket: {
+                // There may be a leftover socket from a previous run, so first remove it.
+                // Ignore return value since it fails if there was no leftover socket.
+                let _ = std::fs::remove_file(parameters.path);
                 let socket = UnixDatagram::bind(parameters.path).unwrap();
                 socket.set_nonblocking(true).unwrap();
                 socket

@@ -55,6 +55,9 @@ fn main() {
     let mut rx_block_count = 0;
     let mut minimum_timing_margin: SampleCount = SampleCount::MAX;
 
+    // Activate SDR once all processors are ready
+    sdr.activate().unwrap();
+
     loop {
         let mut rx_sample_count: SampleCount = 0;
 
