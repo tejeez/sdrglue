@@ -34,7 +34,8 @@ impl RxChannel {
         &mut self,
         intermediate_result: &fcfb::AnalysisIntermediateResult
     ) {
-        self.processor.process(self.fcfb_output.process(intermediate_result));
+        let (sample_counter, samples) = self.fcfb_output.process(intermediate_result);
+        self.processor.process(sample_counter, samples);
     }
 }
 
@@ -77,38 +78,42 @@ impl RxDsp {
         self_
     }
 
+    pub fn add_processor(
+        &mut self,
+        fft_planner: &mut rustfft::FftPlanner<RealSample>,
+        processor: Box<dyn rxthings::RxChannelProcessor>,
+    ) {
+        self.processors.push(RxChannel::new(fft_planner, self.analysis_params, processor));
+    }
+
     fn add_processors_from_cli(
         &mut self,
         fft_planner: &mut rustfft::FftPlanner<RealSample>,
         cli: &configuration::Cli
     ) {
         for args in cli.demodulate_to_udp.chunks_exact(3) {
-            self.processors.push(RxChannel::new(
-                fft_planner,
-                self.analysis_params,
-                Box::new(rxthings::DemodulateToUdp::new(&rxthings::DemodulateToUdpParameters {
+            self.add_processor(fft_planner, Box::new(
+                rxthings::demodulator::DemodulateToUdp::new(&rxthings::demodulator::DemodulateToUdpParameters {
                     center_frequency: args[1].parse().unwrap(),
                     address: args[0].as_str(),
                     modulation: match args[2].to_uppercase().as_str() {
-                        "FM"  => rxthings::Modulation::FM,
-                        "USB" => rxthings::Modulation::USB,
-                        "LSB" => rxthings::Modulation::LSB,
+                        "FM"  => rxthings::demodulator::Modulation::FM,
+                        "USB" => rxthings::demodulator::Modulation::USB,
+                        "LSB" => rxthings::demodulator::Modulation::LSB,
                         // TODO: handle errors more nicely
                         _ => panic!("Unknown modulation {}", args[2]),
                     },
-                })),
+                }),
             ));
         }
 
         for args in cli.record_iq.chunks_exact(3) {
-            self.processors.push(RxChannel::new(
-                fft_planner,
-                self.analysis_params,
-                Box::new(rxthings::RecordIq::new(&rxthings::RecordIqParameters {
+            self.add_processor(fft_planner, Box::new(
+                rxthings::iqrecorder::RecordIq::new(&rxthings::iqrecorder::RecordIqParameters {
                     sample_rate: args[1].parse().unwrap(),
                     center_frequency: args[2].parse().unwrap(),
                     filename: args[0].as_str(),
-                })),
+                }),
             ));
         }
     }

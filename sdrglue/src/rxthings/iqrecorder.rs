@@ -39,7 +39,7 @@ impl RecordIq {
 }
 
 impl RxChannelProcessor for RecordIq {
-    fn process(&mut self, samples: &[ComplexSample]) {
+    fn process(&mut self, sample_counter: SampleCount, samples: &[ComplexSample]) {
         self.output_buffer.clear();
         for &sample in samples {
             for value in [sample.re, sample.im] {
@@ -52,6 +52,7 @@ impl RxChannelProcessor for RecordIq {
             }
         }
         // TODO: print a warning or something if writing to file fails
+        let _ = self.file.seek(std::io::SeekFrom::Start(sample_counter as u64 * 8));
         let _ = self.file.write_all(&self.output_buffer);
     }
 

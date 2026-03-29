@@ -270,7 +270,7 @@ impl AnalysisOutputProcessor {
         }
     }
 
-    pub fn process(&mut self, intermediate_result: &AnalysisIntermediateResult) -> &[ComplexSample] {
+    pub fn process(&mut self, intermediate_result: &AnalysisIntermediateResult) -> (SampleCount, &[ComplexSample]) {
         assert!(intermediate_result.fft_result.len() == self.input_parameters.fft_size);
 
         let phasenum = get_phase_rotation(self.parameters.center_bin, intermediate_result.count, self.input_parameters.overlap);
@@ -315,7 +315,12 @@ impl AnalysisOutputProcessor {
 
         self.ifft_plan.process(&mut self.buffer);
 
-        slice_middle_samples(&self.buffer, self.input_parameters.overlap)
+        let samples = slice_middle_samples(&self.buffer, self.input_parameters.overlap);
+        (
+            // TODO: include delay of FCFB in sample count
+            intermediate_result.count as SampleCount * samples.len() as SampleCount,
+            samples,
+        )
     }
 
     pub fn new_with_frequency(
@@ -557,6 +562,12 @@ impl SynthesisInputProcessor {
     pub fn make_input_buffer(&self) -> InputBuffer {
         InputBuffer::new(self.input_block_size())
     }
+
+    pub fn input_sample_counter(&self, block_count: BlockCount) -> SampleCount {
+        // TODO: include delay of FCFB in sample count
+        block_count as SampleCount * self.input_block_size().new as SampleCount
+    }
+
 
     pub fn new_with_frequency(
         fft_planner: &mut rustfft::FftPlanner<RealSample>,

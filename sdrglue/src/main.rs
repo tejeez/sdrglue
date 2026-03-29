@@ -1,7 +1,4 @@
 
-pub use rustfft::num_complex as num_complex;
-pub use rustfft::num_traits as num_traits;
-
 mod configuration;
 use configuration::Parser;
 mod dsp_types;
@@ -12,6 +9,7 @@ mod tx_dsp;
 mod rxthings;
 mod txthings;
 mod soapyconfig;
+mod test_timing;
 
 use dsp_types::*;
 

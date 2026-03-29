@@ -1,7 +1,7 @@
 
 pub use clap::Parser;
 
-#[derive(Parser)]
+#[derive(Parser, Default)]
 pub struct Cli {
     /// SoapySDR device arguments
     /// as pairs like argument_name argument_value...

@@ -1,16 +1,14 @@
 //! Receive channel processors.
 
-use crate::ComplexSample;
-
 pub mod demodulator;
-pub use demodulator::*;
 
 pub mod iqrecorder;
-pub use iqrecorder::*;
+
+use crate::dsp_types::*;
 
 pub trait RxChannelProcessor {
     /// Process a block of input samples.
-    fn process(&mut self, samples: &[ComplexSample]);
+    fn process(&mut self, sample_counter: SampleCount, samples: &[ComplexSample]);
 
     /// Return required input sample rate in Hertz.
     fn input_sample_rate(&self) -> f64;

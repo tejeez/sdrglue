@@ -2,7 +2,7 @@
 use rustfft;
 use crate::{RealSample, ComplexSample};
 use crate::configuration;
-use crate::fcfb::{self, BlockCount};
+use crate::fcfb;
 use crate::txthings;
 
 
@@ -38,9 +38,9 @@ impl TxChannel {
     fn process(
         &mut self,
         synth: &mut fcfb::SynthesisOutputProcessor,
-        block_count: BlockCount,
+        block_count: fcfb::BlockCount,
     ) {
-        self.processor.process(self.buffer.prepare_for_new_samples());
+        self.processor.process(self.synth_input.input_sample_counter(block_count), self.buffer.prepare_for_new_samples());
         synth.add(self.synth_input.process(self.buffer.buffer(), block_count));
     }
 }
@@ -68,7 +68,7 @@ impl TxDsp {
             ifft_size: (sdr_tx_sample_rate / bin_spacing).round() as usize,
             sample_rate: sdr_tx_sample_rate,
             center_frequency: sdr_tx_center_frequency,
-            overlap: if cli.rx_overlap == "1/4" { fcfb::Overlap::O1_4 } else { fcfb::Overlap::O1_2 },
+            overlap: if cli.tx_overlap == "1/4" { fcfb::Overlap::O1_4 } else { fcfb::Overlap::O1_2 },
         };
         let synth_bank = fcfb::SynthesisOutputProcessor::new(fft_planner, synth_params);
 
@@ -80,9 +80,17 @@ impl TxDsp {
         self_
     }
 
+    pub fn add_processor(
+        &mut self,
+        fft_planner: &mut rustfft::FftPlanner<RealSample>,
+        processor: Box<dyn txthings::TxChannelProcessor>,
+    ) {
+        self.processors.push(TxChannel::new(fft_planner, self.synth_params, processor));
+    }
+
     pub fn process(
         &mut self,
-        block_count: BlockCount,
+        block_count: fcfb::BlockCount,
     ) -> &[ComplexSample] {
         for processor in self.processors.iter_mut() {
             processor.process(&mut self.synth_bank, block_count);

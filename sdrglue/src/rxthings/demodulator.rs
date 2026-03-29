@@ -84,7 +84,7 @@ impl DemodulateToUdp {
 }
 
 impl RxChannelProcessor for DemodulateToUdp {
-    fn process(&mut self, samples: &[ComplexSample]) {
+    fn process(&mut self, _sample_counter: SampleCount, samples: &[ComplexSample]) {
         self.output_buffer.clear();
         for &sample in samples {
             let full_scale = i16::MAX as RealSample;
