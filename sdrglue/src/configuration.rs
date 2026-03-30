@@ -99,13 +99,15 @@ pub struct Cli {
     //#[arg(long, default_value_t = fcfb::Overlap::O1_2)]
     //pub tx_overlap: fcfb::Overlap, // TODO?
 
-    /// Add demodulators with UDP output interface.
+    /// Send demodulated audio to a socket in format compatible with that sent by Gqrx:
+    /// signed 16-bit little endian at a sample rate of 48 kHz.
     /// Each demodulator takes 3 arguments:
-    /// UDP destination address, frequency and modulation.
+    /// Destination address, frequency and modulation.
+    /// Address can start with udp: or unix:.
     /// For example, to add two demodulators:
-    /// --demodulate-to-udp 127.0.0.1:7300 432.5e6 FM 127.0.0.1:7301 432.3e6 USB
+    /// --gqrx udp:127.0.0.1:7300 432.5e6 FM udp:127.0.0.1:7301 432.3e6 USB
     #[arg(long, value_delimiter = ' ', num_args = 3..)]
-    pub demodulate_to_udp: Vec<String>,
+    pub gqrx: Vec<String>,
 
     /// Add I/Q file recorders.
     /// Each recorder takes 3 arguments:
@@ -113,8 +115,12 @@ pub struct Cli {
     #[arg(long, value_delimiter = ' ', num_args = 3..)]
     pub record_iq: Vec<String>,
 
+    /// Send floating point I/Q with sample counters to a socket.
+    /// Each channel takes 3 arguments:
+    /// destination address, sample rate, center frequency.
+    /// Address can start with udp: or unix:.
     #[arg(long, value_delimiter = ' ', num_args = 3..)]
-    pub rx_to_dgram: Vec<String>,
+    pub rx_iqsocket: Vec<String>,
 
     /// Add test pulse transmitters.
     /// Each transmitter takes 3 arguments:
@@ -185,33 +191,32 @@ impl Cli {
         fft_planner: &mut FftPlanner,
         rx_dsp: &mut rx_dsp::RxDsp
     ) {
-        for args in self.rx_to_dgram.chunks_exact(3) {
+        for args in self.rx_iqsocket.chunks_exact(3) {
             rx_dsp.add_processor(fft_planner, Box::new(
-                rxthings::dgram::RxToDgram::new(&rxthings::dgram::RxToDgramParameters {
-                    path: args[0].as_str(),
-                    center_frequency: args[1].parse().unwrap(),
-                    mode: match args[2].to_uppercase().as_str() {
-                        "IQ"  => rxthings::dgram::Mode::IQ,
-                        "FM"  => rxthings::dgram::Mode::FM,
-                        // TODO: handle errors more nicely
-                        _ => panic!("Unknown mode {}", args[2]),
-                    },
+                rxthings::iqsocket::IqSocket::new(&rxthings::iqsocket::IqSocketParameters {
+                    address: args[0].as_str(),
+                    sample_rate: args[1].parse().unwrap(),
+                    center_frequency: args[2].parse().unwrap(),
+                    // This could be made configurable if needed
+                    use_header: true,
                 }),
             ));
         }
 
-        for args in self.demodulate_to_udp.chunks_exact(3) {
+        for args in self.gqrx.chunks_exact(3) {
             rx_dsp.add_processor(fft_planner, Box::new(
-                rxthings::demodulator::DemodulateToUdp::new(&rxthings::demodulator::DemodulateToUdpParameters {
+                rxthings::gqrx::Gqrx::new(&rxthings::gqrx::GqrxParameters {
                     center_frequency: args[1].parse().unwrap(),
                     address: args[0].as_str(),
                     modulation: match args[2].to_uppercase().as_str() {
-                        "FM"  => rxthings::demodulator::Modulation::FM,
-                        "USB" => rxthings::demodulator::Modulation::USB,
-                        "LSB" => rxthings::demodulator::Modulation::LSB,
+                        "FM"  => rxthings::gqrx::Modulation::FM,
+                        "USB" => rxthings::gqrx::Modulation::USB,
+                        "LSB" => rxthings::gqrx::Modulation::LSB,
                         // TODO: handle errors more nicely
                         _ => panic!("Unknown modulation {}", args[2]),
                     },
+                    // TODO: make this configurable
+                    flush_each_block: false,
                 }),
             ));
         }

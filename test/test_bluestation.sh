@@ -9,5 +9,5 @@ cargo build --release
 chrt -f 80 target/release/sdrglue \
     --sdr-rx-freq 438e6 \
     --sdr-tx-freq 438.025e6 \
-    --rx-to-dgram /tmp/bluestation-rx-socket 438.025e6 IQ \
+    --rx-iqsocket unix:/tmp/bluestation-rx-socket 72000.0 438.025e6 \
     --tx-from-dgram /tmp/bluestation-tx-socket 438.025e6 IQ \

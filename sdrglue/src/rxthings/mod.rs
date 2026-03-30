@@ -1,8 +1,11 @@
 //! Receive channel processors.
 
-pub mod demodulator;
-pub mod dgram;
+pub mod gqrx;
 pub mod iqrecorder;
+pub mod iqsocket;
+
+mod packet_output;
+
 
 use crate::dsp_types::*;
 

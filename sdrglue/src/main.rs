@@ -11,9 +11,6 @@ mod txthings;
 mod soapyio;
 mod test_timing;
 
-use dsp_types::*;
-
-
 fn main() {
     tracing_subscriber::fmt().init();
 
@@ -59,8 +56,6 @@ fn main() {
     sdr.activate().unwrap();
 
     loop {
-        let mut rx_sample_count: SampleCount = 0;
-
         if let Some((rx_dsp, block_rx)) = &mut rx {
             let (buffer, block_count) = block_rx.receive(&mut sdr).unwrap();
             rx_dsp.process(buffer, block_count);

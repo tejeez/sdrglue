@@ -1,7 +1,12 @@
+//! Send demodulated audio to a socket
+//! in a format compatible with that sent by Gqrx:
+//! signed 16-bit little endian at a sample rate of 48 kHz.
+//! This is supported by applications such as Direwolf and Horus GUI.
 
 use super::RxChannelProcessor;
 use crate::dsp_types::*;
 use crate::filter;
+use crate::rxthings::packet_output::PacketOutput;
 
 const SAMPLE_RATE: f64 = 48000.0;
 
@@ -12,11 +17,10 @@ pub enum Modulation {
     LSB,
 }
 
-pub struct DemodulateToUdp {
-    /// Center frequency to demodulate
+pub struct Gqrx {
     center_frequency: f64,
-    /// Modulation
     modulation: Modulation,
+    flush_each_block: bool,
     /// Previous sample, used for FM demodulation
     previous_sample: ComplexSample,
     /// Used for SSB demodulation.
@@ -24,25 +28,25 @@ pub struct DemodulateToUdp {
     /// Channel filter, used for both FM and SSB
     /// but with different bandwidth.
     channel_filter: filter::FirComplexSymWithTaps,
-    /// Output buffer.
-    /// Demodulated signal is written here
-    /// in the format that is sent to the UDP socket.
-    output_buffer: Vec<u8>,
-    /// Socket to send demodulated signal to.
-    socket: std::net::UdpSocket,
+
+    output: PacketOutput,
 }
 
-pub struct DemodulateToUdpParameters<'a> {
-    /// Center frequency to demodulate
+pub struct GqrxParameters<'a> {
+    /// Carrier frequency to demodulate
     pub center_frequency: f64,
     /// Address to send UDP packets to.
     pub address: &'a str,
     /// Modulation
     pub modulation: Modulation,
+    /// If true, send a packet for each processing block, minimizing latency.
+    /// If false, fill up each packet to its maximum size,
+    /// possibly reducing CPU use for non-latency-critical applications.
+    pub flush_each_block: bool,
 }
 
-impl DemodulateToUdp {
-    pub fn new(parameters: &DemodulateToUdpParameters) -> Self {
+impl Gqrx {
+    pub fn new(parameters: &GqrxParameters) -> Self {
         Self {
             center_frequency:
                 parameters.center_frequency
@@ -53,21 +57,12 @@ impl DemodulateToUdp {
                     Modulation::USB =>  SSB_WEAVER_OFFSET,
                     Modulation::LSB => -SSB_WEAVER_OFFSET,
                 },
+            modulation: parameters.modulation,
+            flush_each_block: parameters.flush_each_block,
+
             previous_sample: ComplexSample::ZERO,
             second_mixer_phase: 0,
-            // Already allocate space for 1 ms block of output signal.
-            // Well, the blocks might be longer if bin spacing is reduced,
-            // but even if it is, more space will be allocated while
-            // processing the first block and no more dynamic allocations
-            // are needed after that, so it is not really a problem.
-            output_buffer: Vec::<u8>::with_capacity(96),
-            socket: {
-                // Does the bind address matter if we only send data to the socket?
-                // TODO: handle error somehow if creating the socket or connecting fails
-                let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
-                socket.connect(parameters.address).unwrap();
-                socket
-            },
+
             // Channels filters are the same for all instances with the same modulation,
             // so memory use could be reduced (which might be good for cache)
             // by computing them once and sharing them among demodulators.
@@ -78,14 +73,18 @@ impl DemodulateToUdp {
                 Modulation::USB | Modulation::LSB =>
                     filter::design_fir_lowpass(SAMPLE_RATE, 1200.0, 128),
             }),
-            modulation: parameters.modulation,
+
+            // Maximum of 1152 bytes is 12 ms per packet,
+            // aligning packets to processing blocks of both 1 ms and 1.5 ms.
+            // This is not really important but why not.
+            // TODO: return errors
+            output: PacketOutput::new(parameters.address, 1152, false).unwrap(),
         }
     }
 }
 
-impl RxChannelProcessor for DemodulateToUdp {
+impl RxChannelProcessor for Gqrx {
     fn process(&mut self, _sample_counter: SampleCount, samples: &[ComplexSample]) {
-        self.output_buffer.clear();
         for &sample in samples {
             let full_scale = i16::MAX as RealSample;
 
@@ -122,12 +121,16 @@ impl RxChannelProcessor for DemodulateToUdp {
             }
 
             // Format conversion
-            let output_int = (output.min(full_scale).max(-full_scale)) as i16;
-            self.output_buffer.push((output_int & 0xFF) as u8);
-            self.output_buffer.push((output_int >> 8)   as u8);
+            let output_int = (output.min(full_scale).max(-full_scale)).round() as i16;
+            // Sample count is not used here, so its value does not matter
+            self.output.add_sample(0, &output_int.to_le_bytes());
         }
-        // TODO: print a warning or something if writing to socket fails
-        let _ = self.socket.send(&self.output_buffer);
+
+        if self.flush_each_block {
+            self.output.send();
+        } else {
+            self.output.send_if_full();
+        }
     }
 
     fn input_sample_rate(&self) -> f64 {
